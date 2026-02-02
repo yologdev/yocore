@@ -257,12 +257,6 @@ async fn handle_file_event(state: &Arc<tokio::sync::RwLock<WatcherState>>, path:
 
     let path_str = path.to_string_lossy().to_string();
 
-    // Get current file size
-    let new_size = match std::fs::metadata(path) {
-        Ok(m) => m.len(),
-        Err(_) => return, // File might have been deleted
-    };
-
     let file_stem = match path.file_stem().and_then(|s| s.to_str()) {
         Some(stem) => stem.to_string(),
         None => return,
@@ -271,6 +265,15 @@ async fn handle_file_event(state: &Arc<tokio::sync::RwLock<WatcherState>>, path:
     let file_name = match path.file_name().and_then(|n| n.to_str()) {
         Some(name) => name.to_string(),
         None => return,
+    };
+
+    // Get current file size - run blocking I/O in spawn_blocking
+    let path_for_stat = path.clone();
+    let new_size = match tokio::task::spawn_blocking(move || std::fs::metadata(&path_for_stat))
+        .await
+    {
+        Ok(Ok(m)) => m.len(),
+        _ => return, // File might have been deleted or task panicked
     };
 
     let mut state_guard = state.write().await;
@@ -351,14 +354,25 @@ async fn parse_session_file(
     parser_type: &str,
 ) {
     let path = PathBuf::from(file_path);
+    let file_path_owned = file_path.to_string();
 
-    // Read file content
-    let content = match std::fs::read_to_string(&path) {
-        Ok(c) => c,
-        Err(e) => {
+    // Read file content - run blocking I/O in spawn_blocking
+    let path_for_read = path.clone();
+    let content = match tokio::task::spawn_blocking(move || std::fs::read_to_string(&path_for_read))
+        .await
+    {
+        Ok(Ok(c)) => c,
+        Ok(Err(e)) => {
             let _ = event_tx.send(WatcherEvent::Error {
-                file_path: file_path.to_string(),
+                file_path: file_path_owned,
                 error: format!("Failed to read file: {}", e),
+            });
+            return;
+        }
+        Err(_) => {
+            let _ = event_tx.send(WatcherEvent::Error {
+                file_path: file_path_owned,
+                error: "spawn_blocking task panicked".to_string(),
             });
             return;
         }
@@ -407,21 +421,21 @@ async fn store_session(
     parser_type: &str,
     result: &crate::parser::ParseResult,
 ) -> std::result::Result<(), String> {
-    use rusqlite::params;
-
-    let conn = db.conn();
     let now = chrono::Utc::now().to_rfc3339();
     let path = PathBuf::from(file_path);
 
-    // Get or create project from parent directory
-    let project_id = get_or_create_project(&conn, &path)?;
-
-    // Get file metadata
-    let file_size = std::fs::metadata(&path).map(|m| m.len() as i64).ok();
-    let file_modified = std::fs::metadata(&path)
-        .ok()
-        .and_then(|m| m.modified().ok())
-        .map(|t| chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339());
+    // Get file metadata - run blocking I/O in spawn_blocking
+    let path_for_stat = path.clone();
+    let (file_size, file_modified) = tokio::task::spawn_blocking(move || {
+        let meta = std::fs::metadata(&path_for_stat).ok();
+        let size = meta.as_ref().map(|m| m.len() as i64);
+        let modified = meta
+            .and_then(|m| m.modified().ok())
+            .map(|t| chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339());
+        (size, modified)
+    })
+    .await
+    .map_err(|e| format!("spawn_blocking failed: {}", e))?;
 
     // Determine AI tool name
     let ai_tool = match parser_type {
@@ -429,92 +443,120 @@ async fn store_session(
         "openclaw" => "OpenClaw",
         "cursor" => "Cursor",
         _ => parser_type,
-    };
-
-    // Insert or update session
-    conn.execute(
-        "INSERT INTO sessions (
-            id, project_id, file_path, title, ai_tool, message_count,
-            duration_ms, has_code, has_errors, file_size, file_modified,
-            created_at, indexed_at
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
-        ON CONFLICT(id) DO UPDATE SET
-            message_count = ?6,
-            duration_ms = ?7,
-            has_code = ?8,
-            has_errors = ?9,
-            file_size = ?10,
-            file_modified = ?11,
-            indexed_at = ?13",
-        params![
-            session_id,
-            project_id,
-            file_path,
-            result.metadata.title,
-            ai_tool,
-            result.events.len() as i64,
-            result.metadata.duration_ms,
-            result.stats.has_code,
-            result.stats.has_errors,
-            file_size,
-            file_modified,
-            result.metadata.start_time.as_deref().unwrap_or(&now),
-            now,
-        ],
-    ).map_err(|e| format!("Failed to insert session: {}", e))?;
-
-    // Delete existing messages for this session (for re-indexing)
-    conn.execute(
-        "DELETE FROM session_messages WHERE session_id = ?",
-        params![session_id],
-    ).map_err(|e| format!("Failed to delete old messages: {}", e))?;
-
-    // Insert messages
-    for event in &result.events {
-        conn.execute(
-            "INSERT INTO session_messages (
-                session_id, sequence_num, role, content_preview, search_content,
-                has_code, has_error, has_file_changes, tool_name, tool_type, tool_summary,
-                byte_offset, byte_length, input_tokens, output_tokens,
-                cache_read_tokens, cache_creation_tokens, model, timestamp
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
-            params![
-                session_id,
-                event.sequence as i64,
-                event.role,
-                event.content_preview,
-                event.search_content,
-                event.has_code,
-                event.has_error,
-                event.has_file_changes,
-                event.tool_name,
-                event.tool_type,
-                event.tool_summary,
-                event.byte_offset,
-                event.byte_length,
-                event.input_tokens,
-                event.output_tokens,
-                event.cache_read_tokens,
-                event.cache_creation_tokens,
-                event.model,
-                event.timestamp,
-            ],
-        ).map_err(|e| format!("Failed to insert message {}: {}", event.sequence, e))?;
     }
+    .to_string();
+
+    // Prepare data for database operation
+    let session_id = session_id.to_string();
+    let session_id_for_log = session_id.clone();
+    let file_path = file_path.to_string();
+    let title = result.metadata.title.clone();
+    let events_len = result.events.len() as i64;
+    let duration_ms = result.metadata.duration_ms;
+    let has_code = result.stats.has_code;
+    let has_errors = result.stats.has_errors;
+    let start_time = result.metadata.start_time.clone().unwrap_or_else(|| now.clone());
+    let events = result.events.clone();
+
+    // Run all database operations in spawn_blocking via with_conn
+    let project_id = db
+        .with_conn(move |conn| {
+            use rusqlite::params;
+
+            // Get or create project from parent directory
+            let project_id = get_or_create_project_sync(conn, &path)?;
+
+            // Insert or update session
+            conn.execute(
+                "INSERT INTO sessions (
+                    id, project_id, file_path, title, ai_tool, message_count,
+                    duration_ms, has_code, has_errors, file_size, file_modified,
+                    created_at, indexed_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+                ON CONFLICT(id) DO UPDATE SET
+                    message_count = ?6,
+                    duration_ms = ?7,
+                    has_code = ?8,
+                    has_errors = ?9,
+                    file_size = ?10,
+                    file_modified = ?11,
+                    indexed_at = ?13",
+                params![
+                    session_id,
+                    project_id,
+                    file_path,
+                    title,
+                    ai_tool,
+                    events_len,
+                    duration_ms,
+                    has_code,
+                    has_errors,
+                    file_size,
+                    file_modified,
+                    start_time,
+                    now,
+                ],
+            )
+            .map_err(|e| format!("Failed to insert session: {}", e))?;
+
+            // Delete existing messages for this session (for re-indexing)
+            conn.execute(
+                "DELETE FROM session_messages WHERE session_id = ?",
+                params![session_id],
+            )
+            .map_err(|e| format!("Failed to delete old messages: {}", e))?;
+
+            // Insert messages
+            for event in &events {
+                conn.execute(
+                    "INSERT INTO session_messages (
+                        session_id, sequence_num, role, content_preview, search_content,
+                        has_code, has_error, has_file_changes, tool_name, tool_type, tool_summary,
+                        byte_offset, byte_length, input_tokens, output_tokens,
+                        cache_read_tokens, cache_creation_tokens, model, timestamp
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
+                    params![
+                        session_id,
+                        event.sequence as i64,
+                        event.role,
+                        event.content_preview,
+                        event.search_content,
+                        event.has_code,
+                        event.has_error,
+                        event.has_file_changes,
+                        event.tool_name,
+                        event.tool_type,
+                        event.tool_summary,
+                        event.byte_offset,
+                        event.byte_length,
+                        event.input_tokens,
+                        event.output_tokens,
+                        event.cache_read_tokens,
+                        event.cache_creation_tokens,
+                        event.model,
+                        event.timestamp,
+                    ],
+                )
+                .map_err(|e| format!("Failed to insert message {}: {}", event.sequence, e))?;
+            }
+
+            Ok::<String, String>(project_id)
+        })
+        .await?;
 
     tracing::info!(
         "Stored session {} with {} messages in project {}",
-        session_id,
-        result.events.len(),
+        session_id_for_log,
+        events_len,
         project_id
     );
 
     Ok(())
 }
 
-/// Get or create a project for the given session file path
-fn get_or_create_project(
-    conn: &std::sync::MutexGuard<'_, rusqlite::Connection>,
+/// Get or create a project for the given session file path (synchronous version)
+fn get_or_create_project_sync(
+    conn: &rusqlite::Connection,
     session_path: &PathBuf,
 ) -> std::result::Result<String, String> {
     use rusqlite::params;
