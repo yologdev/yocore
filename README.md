@@ -104,7 +104,7 @@ When running in MCP mode (`yocore --mcp`), the following tools are available:
 
 ## Claude Code Integration
 
-For the best experience with Claude Code, use [yo-skills](https://github.com/yologdev/yo-skills) - a skill pack that provides easy access to Yocore's memory system.
+For the best experience with Claude Code, use [yoskill](https://github.com/yologdev/yoskill) - a skill pack that provides easy access to Yocore's memory system.
 
 ### Setup
 
@@ -125,9 +125,9 @@ For the best experience with Claude Code, use [yo-skills](https://github.com/yol
    }
    ```
 
-3. Install yo-skills for convenient slash commands:
+3. Install yoskill for convenient slash commands:
    ```bash
-   git clone https://github.com/yologdev/yo-skills ~/.claude/skills/yo-skills
+   git clone https://github.com/yologdev/yoskill ~/.claude/skills/yoskill
    ```
 
 ### Available Skills
@@ -146,4 +146,4 @@ MIT License - see [LICENSE](LICENSE) for details.
 ## Links
 
 - [Yolog Desktop](https://github.com/yologdev/yolog) - GUI companion app
-- [yo-skills](https://github.com/yologdev/yo-skills) - Claude Code skill pack
+- [yoskill](https://github.com/yologdev/yoskill) - Claude Code skill pack
