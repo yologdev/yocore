@@ -95,7 +95,10 @@ async fn main() -> anyhow::Result<()> {
 
         // Start file watcher if watch paths are configured
         if !core.config.watch.is_empty() {
-            tracing::info!("Starting file watcher for {} paths", core.config.watch.len());
+            tracing::info!(
+                "Starting file watcher for {} paths",
+                core.config.watch.len()
+            );
             core.start_watching().await?;
         }
 

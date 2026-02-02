@@ -5,7 +5,7 @@
 pub mod schema;
 
 use crate::error::{CoreError, Result};
-use rusqlite::{Connection, params};
+use rusqlite::{params, Connection};
 use std::path::PathBuf;
 use std::sync::Mutex;
 

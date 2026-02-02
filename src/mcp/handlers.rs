@@ -334,13 +334,24 @@ fn handle_get_project_context(arguments: Value, db: &McpDb) -> ToolCallResult {
     };
 
     // Get memories by type
-    let decisions = db.get_memories_by_type(&project.id, MemoryType::Decision, 5).unwrap_or_default();
-    let facts = db.get_memories_by_type(&project.id, MemoryType::Fact, 5).unwrap_or_default();
-    let preferences = db.get_memories_by_type(&project.id, MemoryType::Preference, 5).unwrap_or_default();
-    let context_memories = db.get_memories_by_type(&project.id, MemoryType::Context, 5).unwrap_or_default();
-    let tasks = db.get_memories_by_type(&project.id, MemoryType::Task, 5).unwrap_or_default();
+    let decisions = db
+        .get_memories_by_type(&project.id, MemoryType::Decision, 5)
+        .unwrap_or_default();
+    let facts = db
+        .get_memories_by_type(&project.id, MemoryType::Fact, 5)
+        .unwrap_or_default();
+    let preferences = db
+        .get_memories_by_type(&project.id, MemoryType::Preference, 5)
+        .unwrap_or_default();
+    let context_memories = db
+        .get_memories_by_type(&project.id, MemoryType::Context, 5)
+        .unwrap_or_default();
+    let tasks = db
+        .get_memories_by_type(&project.id, MemoryType::Task, 5)
+        .unwrap_or_default();
 
-    let total = decisions.len() + facts.len() + preferences.len() + context_memories.len() + tasks.len();
+    let total =
+        decisions.len() + facts.len() + preferences.len() + context_memories.len() + tasks.len();
 
     let context = ProjectContext {
         project_name: project.name.clone(),
@@ -354,10 +365,7 @@ fn handle_get_project_context(arguments: Value, db: &McpDb) -> ToolCallResult {
     };
 
     if context.total_memories == 0 {
-        return ToolCallResult::text(format!(
-            "No memories found for project '{}'.",
-            project.name
-        ));
+        return ToolCallResult::text(format!("No memories found for project '{}'.", project.name));
     }
 
     let mut output = format!(
@@ -519,12 +527,17 @@ fn handle_get_memories_by_tag(arguments: Value, db: &McpDb) -> ToolCallResult {
     let mut output = if let Some(q) = &params.query {
         format!(
             "Found {} memories with tag '{}' matching '{}' in project '{}':\n\n",
-            memories.len(), params.tag, q, project.name
+            memories.len(),
+            params.tag,
+            q,
+            project.name
         )
     } else {
         format!(
             "Found {} memories with tag '{}' in project '{}':\n\n",
-            memories.len(), params.tag, project.name
+            memories.len(),
+            params.tag,
+            project.name
         )
     };
 
@@ -570,10 +583,7 @@ fn handle_get_recent_memories(arguments: Value, db: &McpDb) -> ToolCallResult {
     };
 
     if session_ids.is_empty() {
-        return ToolCallResult::text(format!(
-            "No sessions found for project '{}'.",
-            project.name
-        ));
+        return ToolCallResult::text(format!("No sessions found for project '{}'.", project.name));
     }
 
     let memories = match db.get_memories_by_sessions(&session_ids, params.limit) {
@@ -590,7 +600,9 @@ fn handle_get_recent_memories(arguments: Value, db: &McpDb) -> ToolCallResult {
 
     let mut output = format!(
         "Found {} memories from last {} sessions in project '{}':\n\n",
-        memories.len(), params.sessions, project.name
+        memories.len(),
+        params.sessions,
+        project.name
     );
 
     for (i, m) in memories.iter().enumerate() {
@@ -627,10 +639,13 @@ fn handle_get_session_context(arguments: Value, db: &McpDb) -> ToolCallResult {
         Err(e) => return ToolCallResult::error(format!("Database error: {}", e)),
     };
 
-    let session_context = match db.get_or_create_session_context(&params.session_id, &project.id, "startup") {
-        Ok(ctx) => ctx,
-        Err(e) => return ToolCallResult::error(format!("Failed to get session context: {}", e)),
-    };
+    let session_context =
+        match db.get_or_create_session_context(&params.session_id, &project.id, "startup") {
+            Ok(ctx) => ctx,
+            Err(e) => {
+                return ToolCallResult::error(format!("Failed to get session context: {}", e))
+            }
+        };
 
     // Get memories from this session
     let session_memories = db
@@ -643,16 +658,20 @@ fn handle_get_session_context(arguments: Value, db: &McpDb) -> ToolCallResult {
         .unwrap_or_default();
 
     let recent_memories = if !recent_session_ids.is_empty() {
-        db.get_memories_by_sessions(&recent_session_ids, 15).unwrap_or_default()
+        db.get_memories_by_sessions(&recent_session_ids, 15)
+            .unwrap_or_default()
     } else {
         vec![]
     };
 
     // Get persistent memories
-    let persistent_memories = db.get_persistent_memories(&project.id, 20).unwrap_or_default();
+    let persistent_memories = db
+        .get_persistent_memories(&project.id, 20)
+        .unwrap_or_default();
 
     // Track access
-    let all_memory_ids: Vec<i64> = session_memories.iter()
+    let all_memory_ids: Vec<i64> = session_memories
+        .iter()
         .chain(recent_memories.iter())
         .chain(persistent_memories.iter())
         .map(|m| m.id)
@@ -691,21 +710,36 @@ fn handle_get_session_context(arguments: Value, db: &McpDb) -> ToolCallResult {
     if !result.persistent_memories.is_empty() {
         output.push_str("\n### Persistent Knowledge (High Importance)\n");
         for m in result.persistent_memories.iter().take(5) {
-            output.push_str(&format!("- **[{}] {}**: {}\n", m.memory_type.display_name(), m.title, m.content));
+            output.push_str(&format!(
+                "- **[{}] {}**: {}\n",
+                m.memory_type.display_name(),
+                m.title,
+                m.content
+            ));
         }
     }
 
     if !result.session_memories.is_empty() {
         output.push_str("\n### This Session's Memories\n");
         for m in result.session_memories.iter().take(5) {
-            output.push_str(&format!("- **[{}] {}**: {}\n", m.memory_type.display_name(), m.title, m.content));
+            output.push_str(&format!(
+                "- **[{}] {}**: {}\n",
+                m.memory_type.display_name(),
+                m.title,
+                m.content
+            ));
         }
     }
 
     if !result.recent_memories.is_empty() {
         output.push_str("\n### Recent Memories (Last 3 Sessions)\n");
         for m in result.recent_memories.iter().take(5) {
-            output.push_str(&format!("- **[{}] {}**: {}\n", m.memory_type.display_name(), m.title, m.content));
+            output.push_str(&format!(
+                "- **[{}] {}**: {}\n",
+                m.memory_type.display_name(),
+                m.title,
+                m.content
+            ));
         }
     }
 

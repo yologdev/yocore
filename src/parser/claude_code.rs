@@ -17,8 +17,10 @@ pub struct ClaudeCodeParser {
 impl ClaudeCodeParser {
     pub fn new() -> Self {
         ClaudeCodeParser {
-            code_regex: Regex::new(r"```|`[^`]+`|function |class |const |let |var |import |export ")
-                .unwrap(),
+            code_regex: Regex::new(
+                r"```|`[^`]+`|function |class |const |let |var |import |export ",
+            )
+            .unwrap(),
             error_regex: Regex::new(r"(?i)error|exception|failed|cannot|undefined|null is not")
                 .unwrap(),
         }
@@ -44,9 +46,20 @@ impl ClaudeCodeParser {
         let event_type = event.get("type").and_then(|v| v.as_str())?;
 
         match event_type {
-            "user" => self.parse_user_event(&event, sequence, byte_offset, byte_length, &timestamp, events_by_uuid),
-            "assistant" => self.parse_assistant_event(&event, sequence, byte_offset, byte_length, &timestamp),
-            "system" => self.parse_system_event(&event, sequence, byte_offset, byte_length, &timestamp),
+            "user" => self.parse_user_event(
+                &event,
+                sequence,
+                byte_offset,
+                byte_length,
+                &timestamp,
+                events_by_uuid,
+            ),
+            "assistant" => {
+                self.parse_assistant_event(&event, sequence, byte_offset, byte_length, &timestamp)
+            }
+            "system" => {
+                self.parse_system_event(&event, sequence, byte_offset, byte_length, &timestamp)
+            }
             "file-history-snapshot" => Some(ParsedEvent {
                 sequence,
                 role: "system".to_string(),
@@ -82,7 +95,11 @@ impl ClaudeCodeParser {
         events_by_uuid: &HashMap<String, Value>,
     ) -> Option<ParsedEvent> {
         // Check if this is a meta/system prompt
-        if event.get("isMeta").and_then(|v| v.as_bool()).unwrap_or(false) {
+        if event
+            .get("isMeta")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
             let content = self.extract_user_content(event);
             let preview = self.sanitize_preview(&content, 200);
             return Some(ParsedEvent {
@@ -223,8 +240,12 @@ impl ClaudeCodeParser {
     ) -> Option<ParsedEvent> {
         // Extract token usage
         let usage = event.get("message").and_then(|m| m.get("usage"));
-        let input_tokens = usage.and_then(|u| u.get("input_tokens")).and_then(|v| v.as_i64());
-        let output_tokens = usage.and_then(|u| u.get("output_tokens")).and_then(|v| v.as_i64());
+        let input_tokens = usage
+            .and_then(|u| u.get("input_tokens"))
+            .and_then(|v| v.as_i64());
+        let output_tokens = usage
+            .and_then(|u| u.get("output_tokens"))
+            .and_then(|v| v.as_i64());
         let cache_read_tokens = usage
             .and_then(|u| u.get("cache_read_input_tokens"))
             .and_then(|v| v.as_i64());
@@ -463,7 +484,9 @@ impl ClaudeCodeParser {
     fn extract_task_notification(&self, content: &str) -> String {
         let re = Regex::new(r"<task-notification>([\s\S]*?)</task-notification>").unwrap();
         if let Some(caps) = re.captures(content) {
-            caps.get(1).map(|m| m.as_str().trim().to_string()).unwrap_or_else(|| content.to_string())
+            caps.get(1)
+                .map(|m| m.as_str().trim().to_string())
+                .unwrap_or_else(|| content.to_string())
         } else {
             content.to_string()
         }
@@ -473,7 +496,11 @@ impl ClaudeCodeParser {
         let tool_result = event.get("toolUseResult")?;
 
         // Read tool: has file.filePath structure
-        if tool_result.get("file").and_then(|f| f.get("filePath")).is_some() {
+        if tool_result
+            .get("file")
+            .and_then(|f| f.get("filePath"))
+            .is_some()
+        {
             return Some("Read".to_string());
         }
 
@@ -507,12 +534,20 @@ impl ClaudeCodeParser {
         }
     }
 
-    fn generate_tool_summary(&self, tool_name: &str, tool_call: &Option<Value>, tool_output: Option<&str>) -> String {
+    fn generate_tool_summary(
+        &self,
+        tool_name: &str,
+        tool_call: &Option<Value>,
+        tool_output: Option<&str>,
+    ) -> String {
         let input = tool_call.as_ref().and_then(|tc| tc.get("input"));
 
         match tool_name {
             "Bash" => {
-                if let Some(cmd) = input.and_then(|i| i.get("command")).and_then(|c| c.as_str()) {
+                if let Some(cmd) = input
+                    .and_then(|i| i.get("command"))
+                    .and_then(|c| c.as_str())
+                {
                     if cmd.len() > 50 {
                         format!("{}...", &cmd[..50])
                     } else {
@@ -523,7 +558,10 @@ impl ClaudeCodeParser {
                 }
             }
             "Write" => {
-                if let Some(path) = input.and_then(|i| i.get("file_path")).and_then(|p| p.as_str()) {
+                if let Some(path) = input
+                    .and_then(|i| i.get("file_path"))
+                    .and_then(|p| p.as_str())
+                {
                     let file_name = path.split('/').last().unwrap_or(path);
                     if tool_output.is_some() {
                         format!("File created successfully at: {}", file_name)
@@ -535,7 +573,10 @@ impl ClaudeCodeParser {
                 }
             }
             "Edit" => {
-                if let Some(path) = input.and_then(|i| i.get("file_path")).and_then(|p| p.as_str()) {
+                if let Some(path) = input
+                    .and_then(|i| i.get("file_path"))
+                    .and_then(|p| p.as_str())
+                {
                     let file_name = path.split('/').last().unwrap_or(path);
                     if tool_output.is_some() {
                         format!("Successfully edited {}", file_name)
@@ -547,7 +588,10 @@ impl ClaudeCodeParser {
                 }
             }
             "Read" => {
-                if let Some(path) = input.and_then(|i| i.get("file_path")).and_then(|p| p.as_str()) {
+                if let Some(path) = input
+                    .and_then(|i| i.get("file_path"))
+                    .and_then(|p| p.as_str())
+                {
                     let file_name = path.split('/').last().unwrap_or(path);
                     format!("Read {}", file_name)
                 } else {
@@ -555,7 +599,10 @@ impl ClaudeCodeParser {
                 }
             }
             "Grep" => {
-                if let Some(pattern) = input.and_then(|i| i.get("pattern")).and_then(|p| p.as_str()) {
+                if let Some(pattern) = input
+                    .and_then(|i| i.get("pattern"))
+                    .and_then(|p| p.as_str())
+                {
                     if pattern.len() > 30 {
                         format!("Search: {}...", &pattern[..30])
                     } else {
@@ -566,14 +613,20 @@ impl ClaudeCodeParser {
                 }
             }
             "Glob" => {
-                if let Some(pattern) = input.and_then(|i| i.get("pattern")).and_then(|p| p.as_str()) {
+                if let Some(pattern) = input
+                    .and_then(|i| i.get("pattern"))
+                    .and_then(|p| p.as_str())
+                {
                     format!("Files: {}", pattern)
                 } else {
                     "File glob".to_string()
                 }
             }
             "Task" => {
-                if let Some(desc) = input.and_then(|i| i.get("description")).and_then(|d| d.as_str()) {
+                if let Some(desc) = input
+                    .and_then(|i| i.get("description"))
+                    .and_then(|d| d.as_str())
+                {
                     if desc.len() > 50 {
                         format!("{}...", &desc[..50])
                     } else {
@@ -587,21 +640,35 @@ impl ClaudeCodeParser {
         }
     }
 
-    fn generate_tool_preview(&self, tool_name: &str, tool_call: &Value, tool_summary: &str) -> String {
+    fn generate_tool_preview(
+        &self,
+        tool_name: &str,
+        tool_call: &Value,
+        tool_summary: &str,
+    ) -> String {
         let input = tool_call.get("input");
 
         match tool_name {
             "Bash" => {
-                if let Some(cmd) = input.and_then(|i| i.get("command")).and_then(|c| c.as_str()) {
+                if let Some(cmd) = input
+                    .and_then(|i| i.get("command"))
+                    .and_then(|c| c.as_str())
+                {
                     format!("$ {}", cmd)
                 } else {
                     tool_summary.to_string()
                 }
             }
             "Write" => {
-                if let Some(path) = input.and_then(|i| i.get("file_path")).and_then(|p| p.as_str()) {
+                if let Some(path) = input
+                    .and_then(|i| i.get("file_path"))
+                    .and_then(|p| p.as_str())
+                {
                     let file_name = path.split('/').last().unwrap_or(path);
-                    if let Some(content) = input.and_then(|i| i.get("content")).and_then(|c| c.as_str()) {
+                    if let Some(content) = input
+                        .and_then(|i| i.get("content"))
+                        .and_then(|c| c.as_str())
+                    {
                         let snippet: String = content.chars().take(150).collect();
                         let snippet = snippet.replace('\n', " ");
                         format!("Write {}: {}...", file_name, snippet)
@@ -613,7 +680,10 @@ impl ClaudeCodeParser {
                 }
             }
             "Read" => {
-                if let Some(path) = input.and_then(|i| i.get("file_path")).and_then(|p| p.as_str()) {
+                if let Some(path) = input
+                    .and_then(|i| i.get("file_path"))
+                    .and_then(|p| p.as_str())
+                {
                     format!("Read {}", path)
                 } else {
                     tool_summary.to_string()
@@ -712,14 +782,11 @@ impl ClaudeCodeParser {
         timestamps.sort();
 
         if !timestamps.is_empty() {
-            metadata.start_time = events
-                .iter()
-                .filter(|e| e.role != "system")
-                .find_map(|e| {
-                    chrono::DateTime::parse_from_rfc3339(&e.timestamp)
-                        .ok()
-                        .map(|_| e.timestamp.clone())
-                });
+            metadata.start_time = events.iter().filter(|e| e.role != "system").find_map(|e| {
+                chrono::DateTime::parse_from_rfc3339(&e.timestamp)
+                    .ok()
+                    .map(|_| e.timestamp.clone())
+            });
 
             metadata.end_time = events
                 .iter()
@@ -748,9 +815,7 @@ impl ClaudeCodeParser {
         }
 
         // Extract model from first assistant message with usage
-        metadata.model = events
-            .iter()
-            .find_map(|e| e.model.clone());
+        metadata.model = events.iter().find_map(|e| e.model.clone());
 
         // Generate title from first user message
         metadata.title = events

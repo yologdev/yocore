@@ -351,7 +351,9 @@ fn create_indexes(conn: &Connection) -> Result<()> {
 fn init_fts_tables(conn: &Connection) -> Result<()> {
     // Check if FTS5 tables already exist
     let messages_fts_exists: bool = conn
-        .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='session_messages_fts'")
+        .prepare(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='session_messages_fts'",
+        )
         .and_then(|mut stmt| stmt.query_row([], |_| Ok(true)))
         .unwrap_or(false);
 
@@ -505,6 +507,10 @@ mod tests {
             )
             .unwrap();
 
-        assert!(table_count >= 10, "Expected at least 10 tables, got {}", table_count);
+        assert!(
+            table_count >= 10,
+            "Expected at least 10 tables, got {}",
+            table_count
+        );
     }
 }

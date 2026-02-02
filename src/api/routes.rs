@@ -43,12 +43,18 @@ pub async fn list_projects(
                 auto_sync, longest_streak, created_at, updated_at
          FROM projects
          ORDER BY updated_at DESC
-         LIMIT ? OFFSET ?"
+         LIMIT ? OFFSET ?",
     ) {
         Ok(stmt) => stmt,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
-            "error": e.to_string()
-        }))).into_response(),
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": e.to_string()
+                })),
+            )
+                .into_response()
+        }
     };
 
     let projects: Vec<serde_json::Value> = stmt
@@ -77,7 +83,8 @@ pub async fn list_projects(
     Json(serde_json::json!({
         "projects": projects,
         "total": total
-    })).into_response()
+    }))
+    .into_response()
 }
 
 #[derive(Debug, Deserialize)]
@@ -152,14 +159,20 @@ pub async fn get_project(
         },
     ) {
         Ok(project) => Json(project).into_response(),
-        Err(rusqlite::Error::QueryReturnedNoRows) => {
-            (StatusCode::NOT_FOUND, Json(serde_json::json!({
+        Err(rusqlite::Error::QueryReturnedNoRows) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
                 "error": "Project not found"
-            }))).into_response()
-        }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
-            "error": e.to_string()
-        }))).into_response(),
+            })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": e.to_string()
+            })),
+        )
+            .into_response(),
     }
 }
 
@@ -212,24 +225,30 @@ pub async fn update_project(
 
     params.push(Box::new(id.clone()));
 
-    let query = format!(
-        "UPDATE projects SET {} WHERE id = ?",
-        updates.join(", ")
-    );
+    let query = format!("UPDATE projects SET {} WHERE id = ?", updates.join(", "));
 
     let params_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
 
     match conn.execute(&query, params_refs.as_slice()) {
-        Ok(0) => (StatusCode::NOT_FOUND, Json(serde_json::json!({
-            "error": "Project not found"
-        }))).into_response(),
+        Ok(0) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": "Project not found"
+            })),
+        )
+            .into_response(),
         Ok(_) => Json(serde_json::json!({
             "id": id,
             "updated_at": now
-        })).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
-            "error": e.to_string()
-        }))).into_response(),
+        }))
+        .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": e.to_string()
+            })),
+        )
+            .into_response(),
     }
 }
 
@@ -239,13 +258,21 @@ pub async fn delete_project(
 ) -> impl IntoResponse {
     let conn = state.db.conn();
     match conn.execute("DELETE FROM projects WHERE id = ?", [&id]) {
-        Ok(0) => (StatusCode::NOT_FOUND, Json(serde_json::json!({
-            "error": "Project not found"
-        }))).into_response(),
+        Ok(0) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": "Project not found"
+            })),
+        )
+            .into_response(),
         Ok(_) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
-            "error": e.to_string()
-        }))).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": e.to_string()
+            })),
+        )
+            .into_response(),
     }
 }
 
@@ -270,40 +297,59 @@ pub async fn list_sessions(
     let offset = query.offset.unwrap_or(0);
     let include_hidden = query.include_hidden.unwrap_or(false);
 
-    let (sql, params): (String, Vec<Box<dyn rusqlite::ToSql>>) = if let Some(project_id) = &query.project_id {
-        let hidden_filter = if include_hidden { "" } else { " AND is_hidden = 0" };
-        (
-            format!(
-                "SELECT id, project_id, file_path, title, ai_tool, message_count,
+    let (sql, params): (String, Vec<Box<dyn rusqlite::ToSql>>) =
+        if let Some(project_id) = &query.project_id {
+            let hidden_filter = if include_hidden {
+                ""
+            } else {
+                " AND is_hidden = 0"
+            };
+            (
+                format!(
+                    "SELECT id, project_id, file_path, title, ai_tool, message_count,
                         duration_ms, has_code, has_errors, is_hidden, created_at, indexed_at
                  FROM sessions
                  WHERE project_id = ?{hidden_filter}
                  ORDER BY created_at DESC
                  LIMIT ? OFFSET ?"
-            ),
-            vec![Box::new(project_id.clone()), Box::new(limit), Box::new(offset)]
-        )
-    } else {
-        let hidden_filter = if include_hidden { "" } else { " WHERE is_hidden = 0" };
-        (
-            format!(
-                "SELECT id, project_id, file_path, title, ai_tool, message_count,
+                ),
+                vec![
+                    Box::new(project_id.clone()),
+                    Box::new(limit),
+                    Box::new(offset),
+                ],
+            )
+        } else {
+            let hidden_filter = if include_hidden {
+                ""
+            } else {
+                " WHERE is_hidden = 0"
+            };
+            (
+                format!(
+                    "SELECT id, project_id, file_path, title, ai_tool, message_count,
                         duration_ms, has_code, has_errors, is_hidden, created_at, indexed_at
                  FROM sessions{hidden_filter}
                  ORDER BY created_at DESC
                  LIMIT ? OFFSET ?"
-            ),
-            vec![Box::new(limit), Box::new(offset)]
-        )
-    };
+                ),
+                vec![Box::new(limit), Box::new(offset)],
+            )
+        };
 
     let params_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
 
     let mut stmt = match conn.prepare(&sql) {
         Ok(stmt) => stmt,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
-            "error": e.to_string()
-        }))).into_response(),
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": e.to_string()
+                })),
+            )
+                .into_response()
+        }
     };
 
     let sessions: Vec<serde_json::Value> = stmt
@@ -328,23 +374,34 @@ pub async fn list_sessions(
 
     // Get total count
     let count_sql = if let Some(project_id) = &query.project_id {
-        let hidden_filter = if include_hidden { "" } else { " AND is_hidden = 0" };
+        let hidden_filter = if include_hidden {
+            ""
+        } else {
+            " AND is_hidden = 0"
+        };
         format!("SELECT COUNT(*) FROM sessions WHERE project_id = ?{hidden_filter}")
     } else {
-        let hidden_filter = if include_hidden { "" } else { " WHERE is_hidden = 0" };
+        let hidden_filter = if include_hidden {
+            ""
+        } else {
+            " WHERE is_hidden = 0"
+        };
         format!("SELECT COUNT(*) FROM sessions{hidden_filter}")
     };
 
     let total: i64 = if let Some(project_id) = &query.project_id {
-        conn.query_row(&count_sql, [project_id], |row| row.get(0)).unwrap_or(0)
+        conn.query_row(&count_sql, [project_id], |row| row.get(0))
+            .unwrap_or(0)
     } else {
-        conn.query_row(&count_sql, [], |row| row.get(0)).unwrap_or(0)
+        conn.query_row(&count_sql, [], |row| row.get(0))
+            .unwrap_or(0)
     };
 
     Json(serde_json::json!({
         "sessions": sessions,
         "total": total
-    })).into_response()
+    }))
+    .into_response()
 }
 
 pub async fn get_session(
@@ -375,14 +432,20 @@ pub async fn get_session(
         },
     ) {
         Ok(session) => Json(session).into_response(),
-        Err(rusqlite::Error::QueryReturnedNoRows) => {
-            (StatusCode::NOT_FOUND, Json(serde_json::json!({
+        Err(rusqlite::Error::QueryReturnedNoRows) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
                 "error": "Session not found"
-            }))).into_response()
-        }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
-            "error": e.to_string()
-        }))).into_response(),
+            })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": e.to_string()
+            })),
+        )
+            .into_response(),
     }
 }
 
@@ -415,24 +478,30 @@ pub async fn update_session(
 
     params.push(Box::new(id.clone()));
 
-    let query = format!(
-        "UPDATE sessions SET {} WHERE id = ?",
-        updates.join(", ")
-    );
+    let query = format!("UPDATE sessions SET {} WHERE id = ?", updates.join(", "));
 
     let params_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
 
     match conn.execute(&query, params_refs.as_slice()) {
-        Ok(0) => (StatusCode::NOT_FOUND, Json(serde_json::json!({
-            "error": "Session not found"
-        }))).into_response(),
+        Ok(0) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": "Session not found"
+            })),
+        )
+            .into_response(),
         Ok(_) => Json(serde_json::json!({
             "id": id,
             "updated_at": now
-        })).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
-            "error": e.to_string()
-        }))).into_response(),
+        }))
+        .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": e.to_string()
+            })),
+        )
+            .into_response(),
     }
 }
 
@@ -442,13 +511,21 @@ pub async fn delete_session(
 ) -> impl IntoResponse {
     let conn = state.db.conn();
     match conn.execute("DELETE FROM sessions WHERE id = ?", [&id]) {
-        Ok(0) => (StatusCode::NOT_FOUND, Json(serde_json::json!({
-            "error": "Session not found"
-        }))).into_response(),
+        Ok(0) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": "Session not found"
+            })),
+        )
+            .into_response(),
         Ok(_) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
-            "error": e.to_string()
-        }))).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": e.to_string()
+            })),
+        )
+            .into_response(),
     }
 }
 
@@ -475,12 +552,18 @@ pub async fn get_session_messages(
          FROM session_messages
          WHERE session_id = ?
          ORDER BY sequence_num
-         LIMIT ? OFFSET ?"
+         LIMIT ? OFFSET ?",
     ) {
         Ok(stmt) => stmt,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
-            "error": e.to_string()
-        }))).into_response(),
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": e.to_string()
+                })),
+            )
+                .into_response()
+        }
     };
 
     let messages: Vec<serde_json::Value> = stmt
@@ -518,7 +601,8 @@ pub async fn get_session_messages(
     Json(serde_json::json!({
         "messages": messages,
         "total": total
-    })).into_response()
+    }))
+    .into_response()
 }
 
 pub async fn get_message_content(
@@ -544,16 +628,24 @@ pub async fn get_message_content(
                 Ok(mut file) => {
                     use std::io::{Read, Seek, SeekFrom};
                     if file.seek(SeekFrom::Start(byte_offset as u64)).is_err() {
-                        return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
-                            "error": "Failed to seek to message offset"
-                        }))).into_response();
+                        return (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(serde_json::json!({
+                                "error": "Failed to seek to message offset"
+                            })),
+                        )
+                            .into_response();
                     }
 
                     let mut buffer = vec![0u8; byte_length as usize];
                     if file.read_exact(&mut buffer).is_err() {
-                        return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
-                            "error": "Failed to read message content"
-                        }))).into_response();
+                        return (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(serde_json::json!({
+                                "error": "Failed to read message content"
+                            })),
+                        )
+                            .into_response();
                     }
 
                     match String::from_utf8(buffer) {
@@ -567,24 +659,38 @@ pub async fn get_message_content(
                                 }
                             }
                         }
-                        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
-                            "error": "Invalid UTF-8 in message content"
-                        }))).into_response(),
+                        Err(_) => (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(serde_json::json!({
+                                "error": "Invalid UTF-8 in message content"
+                            })),
+                        )
+                            .into_response(),
                     }
                 }
-                Err(e) => (StatusCode::NOT_FOUND, Json(serde_json::json!({
-                    "error": format!("Session file not found: {}", e)
-                }))).into_response(),
+                Err(e) => (
+                    StatusCode::NOT_FOUND,
+                    Json(serde_json::json!({
+                        "error": format!("Session file not found: {}", e)
+                    })),
+                )
+                    .into_response(),
             }
         }
-        Err(rusqlite::Error::QueryReturnedNoRows) => {
-            (StatusCode::NOT_FOUND, Json(serde_json::json!({
+        Err(rusqlite::Error::QueryReturnedNoRows) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
                 "error": "Message not found"
-            }))).into_response()
-        }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
-            "error": e.to_string()
-        }))).into_response(),
+            })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": e.to_string()
+            })),
+        )
+            .into_response(),
     }
 }
 
@@ -638,9 +744,15 @@ pub async fn search(
 
     let mut stmt = match conn.prepare(&sql) {
         Ok(stmt) => stmt,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
-            "error": e.to_string()
-        }))).into_response(),
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": e.to_string()
+                })),
+            )
+                .into_response()
+        }
     };
 
     let results: Vec<serde_json::Value> = if let Some(project_id) = &req.project_id {
@@ -671,7 +783,8 @@ pub async fn search(
 
     Json(serde_json::json!({
         "results": results
-    })).into_response()
+    }))
+    .into_response()
 }
 
 #[derive(Debug, Deserialize)]
@@ -698,9 +811,15 @@ pub async fn search_session(
          LIMIT {limit}"
     )) {
         Ok(stmt) => stmt,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
-            "error": e.to_string()
-        }))).into_response(),
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": e.to_string()
+                })),
+            )
+                .into_response()
+        }
     };
 
     let results: Vec<serde_json::Value> = stmt
@@ -717,7 +836,8 @@ pub async fn search_session(
 
     Json(serde_json::json!({
         "results": results
-    })).into_response()
+    }))
+    .into_response()
 }
 
 // ============================================================================
@@ -774,9 +894,15 @@ pub async fn list_memories(
 
     let mut stmt = match conn.prepare(&sql) {
         Ok(stmt) => stmt,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
-            "error": e.to_string()
-        }))).into_response(),
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": e.to_string()
+                })),
+            )
+                .into_response()
+        }
     };
 
     let memories: Vec<serde_json::Value> = stmt
@@ -801,7 +927,8 @@ pub async fn list_memories(
 
     Json(serde_json::json!({
         "memories": memories
-    })).into_response()
+    }))
+    .into_response()
 }
 
 #[derive(Debug, Deserialize)]
@@ -846,9 +973,15 @@ pub async fn search_memories(
 
     let mut stmt = match conn.prepare(&sql) {
         Ok(stmt) => stmt,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
-            "error": e.to_string()
-        }))).into_response(),
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": e.to_string()
+                })),
+            )
+                .into_response()
+        }
     };
 
     let memories: Vec<serde_json::Value> = if let Some(project_id) = &req.project_id {
@@ -891,13 +1024,11 @@ pub async fn search_memories(
 
     Json(serde_json::json!({
         "memories": memories
-    })).into_response()
+    }))
+    .into_response()
 }
 
-pub async fn get_memory(
-    State(state): State<AppState>,
-    Path(id): Path<i64>,
-) -> impl IntoResponse {
+pub async fn get_memory(State(state): State<AppState>, Path(id): Path<i64>) -> impl IntoResponse {
     let conn = state.db.conn();
     match conn.query_row(
         "SELECT id, project_id, session_id, memory_type, title, content,
@@ -922,14 +1053,20 @@ pub async fn get_memory(
         },
     ) {
         Ok(memory) => Json(memory).into_response(),
-        Err(rusqlite::Error::QueryReturnedNoRows) => {
-            (StatusCode::NOT_FOUND, Json(serde_json::json!({
+        Err(rusqlite::Error::QueryReturnedNoRows) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
                 "error": "Memory not found"
-            }))).into_response()
-        }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
-            "error": e.to_string()
-        }))).into_response(),
+            })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": e.to_string()
+            })),
+        )
+            .into_response(),
     }
 }
 
@@ -969,21 +1106,26 @@ pub async fn update_memory(
 
     params.push(Box::new(id));
 
-    let query = format!(
-        "UPDATE memories SET {} WHERE id = ?",
-        updates.join(", ")
-    );
+    let query = format!("UPDATE memories SET {} WHERE id = ?", updates.join(", "));
 
     let params_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
 
     match conn.execute(&query, params_refs.as_slice()) {
-        Ok(0) => (StatusCode::NOT_FOUND, Json(serde_json::json!({
-            "error": "Memory not found"
-        }))).into_response(),
+        Ok(0) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": "Memory not found"
+            })),
+        )
+            .into_response(),
         Ok(_) => Json(serde_json::json!({ "id": id })).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
-            "error": e.to_string()
-        }))).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": e.to_string()
+            })),
+        )
+            .into_response(),
     }
 }
 
@@ -994,12 +1136,20 @@ pub async fn delete_memory(
     let conn = state.db.conn();
     // Soft delete by setting state to 'removed'
     match conn.execute("UPDATE memories SET state = 'removed' WHERE id = ?", [id]) {
-        Ok(0) => (StatusCode::NOT_FOUND, Json(serde_json::json!({
-            "error": "Memory not found"
-        }))).into_response(),
+        Ok(0) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": "Memory not found"
+            })),
+        )
+            .into_response(),
         Ok(_) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
-            "error": e.to_string()
-        }))).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": e.to_string()
+            })),
+        )
+            .into_response(),
     }
 }

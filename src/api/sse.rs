@@ -16,12 +16,13 @@ pub async fn events_handler(
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     // For now, just send periodic heartbeat events
     // TODO: Implement actual event broadcasting for session updates, new files, etc.
-    let stream = tokio_stream::wrappers::IntervalStream::new(tokio::time::interval(Duration::from_secs(30)))
-        .map(|_| {
-            Ok(Event::default()
-                .event("heartbeat")
-                .data(serde_json::json!({ "timestamp": chrono::Utc::now().to_rfc3339() }).to_string()))
-        });
+    let stream =
+        tokio_stream::wrappers::IntervalStream::new(tokio::time::interval(Duration::from_secs(30)))
+            .map(|_| {
+                Ok(Event::default().event("heartbeat").data(
+                    serde_json::json!({ "timestamp": chrono::Utc::now().to_rfc3339() }).to_string(),
+                ))
+            });
 
     Sse::new(stream).keep_alive(
         axum::response::sse::KeepAlive::new()

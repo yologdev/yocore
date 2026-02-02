@@ -30,9 +30,7 @@ pub async fn run_mcp_server(core: Core) -> Result<()> {
     tracing::info!("Starting MCP server (stdio mode)");
 
     // Run the blocking stdio loop in a separate thread
-    let result = tokio::task::spawn_blocking(move || {
-        run_stdio_loop(&mcp_db)
-    }).await;
+    let result = tokio::task::spawn_blocking(move || run_stdio_loop(&mcp_db)).await;
 
     match result {
         Ok(Ok(())) => Ok(()),

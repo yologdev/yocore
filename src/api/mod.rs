@@ -12,7 +12,7 @@ use crate::error::Result;
 
 use axum::{
     middleware,
-    routing::{get, post, patch, delete},
+    routing::{delete, get, patch, post},
     Router,
 };
 use std::net::SocketAddr;
@@ -69,7 +69,10 @@ fn create_router(state: AppState) -> Router {
         .route("/sessions/:id", patch(routes::update_session))
         .route("/sessions/:id", delete(routes::delete_session))
         .route("/sessions/:id/messages", get(routes::get_session_messages))
-        .route("/sessions/:id/messages/:seq/content", get(routes::get_message_content))
+        .route(
+            "/sessions/:id/messages/:seq/content",
+            get(routes::get_message_content),
+        )
         .route("/sessions/:id/search", get(routes::search_session))
         // Search
         .route("/search", post(routes::search))
@@ -82,7 +85,10 @@ fn create_router(state: AppState) -> Router {
         // Server-Sent Events
         .route("/events", get(sse::events_handler))
         // Apply auth middleware to all API routes
-        .layer(middleware::from_fn_with_state(state.clone(), auth::auth_middleware));
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth::auth_middleware,
+        ));
 
     Router::new()
         // Health check (public, no auth required)

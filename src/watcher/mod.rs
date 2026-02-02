@@ -37,10 +37,7 @@ pub enum WatcherEvent {
         message_count: usize,
     },
     /// Error during processing
-    Error {
-        file_path: String,
-        error: String,
-    },
+    Error { file_path: String, error: String },
 }
 
 /// Handle for controlling the file watcher
@@ -117,9 +114,7 @@ pub async fn start_watcher(config: &Config, db: Arc<Database>) -> Result<Watcher
                 let file_path = entry.path();
                 if is_session_file(&file_path) {
                     if let Some(stem) = file_path.file_stem().and_then(|s| s.to_str()) {
-                        let size = std::fs::metadata(&file_path)
-                            .map(|m| m.len())
-                            .unwrap_or(0);
+                        let size = std::fs::metadata(&file_path).map(|m| m.len()).unwrap_or(0);
                         tracked_files.insert(
                             stem.to_string(),
                             TrackedFile {
@@ -244,10 +239,7 @@ fn is_session_file(path: &PathBuf) -> bool {
 }
 
 /// Handle a file system event
-async fn handle_file_event(
-    state: &Arc<tokio::sync::RwLock<WatcherState>>,
-    path: &PathBuf,
-) {
+async fn handle_file_event(state: &Arc<tokio::sync::RwLock<WatcherState>>, path: &PathBuf) {
     // Must be a .jsonl file
     if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
         return;
@@ -387,11 +379,7 @@ async fn parse_session_file(
     let result = parser.parse(&lines);
 
     let message_count = result.events.len();
-    tracing::info!(
-        "Parsed session {}: {} messages",
-        session_id,
-        message_count
-    );
+    tracing::info!("Parsed session {}: {} messages", session_id, message_count);
 
     // Store in database (TODO: implement session storage)
     // For now, just emit the event

@@ -1,8 +1,8 @@
 //! Database operations for MCP server
 //! Wraps yocore's Database with MCP-specific query methods
 
-use crate::db::Database;
 use super::types::{Memory, MemoryType, Project, SessionContext};
+use crate::db::Database;
 use std::sync::Arc;
 
 /// MCP database operations
@@ -87,7 +87,11 @@ impl McpDb {
     }
 
     /// Get recent sessions for a project
-    pub fn get_recent_sessions(&self, project_id: &str, limit: usize) -> Result<Vec<String>, String> {
+    pub fn get_recent_sessions(
+        &self,
+        project_id: &str,
+        limit: usize,
+    ) -> Result<Vec<String>, String> {
         let conn = self.db.conn();
 
         let mut stmt = conn
@@ -209,7 +213,8 @@ impl McpDb {
         conn.execute(
             "UPDATE session_context SET resume_context = ?, updated_at = ? WHERE session_id = ?",
             [summary, &now, session_id],
-        ).map_err(|e| format!("Failed to save lifeboat: {}", e))?;
+        )
+        .map_err(|e| format!("Failed to save lifeboat: {}", e))?;
 
         Ok(())
     }
@@ -233,7 +238,10 @@ impl McpDb {
             .map_err(|e| format!("Failed to prepare query: {}", e))?;
 
         let session_ids = stmt
-            .query_map([project_id, exclude_session_id, &limit.to_string()], |row| row.get(0))
+            .query_map(
+                [project_id, exclude_session_id, &limit.to_string()],
+                |row| row.get(0),
+            )
             .map_err(|e| format!("Failed to query sessions: {}", e))?
             .filter_map(|r| r.ok())
             .collect();
@@ -316,9 +324,7 @@ impl McpDb {
             .map_err(|e| format!("Failed to prepare search query: {}", e))?;
 
         let memories = stmt
-            .query_map(params_refs.as_slice(), |row| {
-                row_to_memory(row)
-            })
+            .query_map(params_refs.as_slice(), |row| row_to_memory(row))
             .map_err(|e| format!("Failed to execute search: {}", e))?
             .filter_map(|r| r.ok())
             .collect();
@@ -347,9 +353,10 @@ impl McpDb {
             .map_err(|e| format!("Failed to prepare query: {}", e))?;
 
         let memories = stmt
-            .query_map([project_id, memory_type.to_db_str(), &limit.to_string()], |row| {
-                row_to_memory(row)
-            })
+            .query_map(
+                [project_id, memory_type.to_db_str(), &limit.to_string()],
+                |row| row_to_memory(row),
+            )
             .map_err(|e| format!("Failed to execute query: {}", e))?
             .filter_map(|r| r.ok())
             .collect();
@@ -463,7 +470,11 @@ impl McpDb {
     }
 
     /// Get high-state (persistent) memories for a project
-    pub fn get_persistent_memories(&self, project_id: &str, limit: usize) -> Result<Vec<Memory>, String> {
+    pub fn get_persistent_memories(
+        &self,
+        project_id: &str,
+        limit: usize,
+    ) -> Result<Vec<Memory>, String> {
         let conn = self.db.conn();
 
         let mut stmt = conn
