@@ -1,0 +1,11 @@
+{
+  "name": "@yologdev/core",
+  "version": "0.1.0",
+  "description": "Yocore - headless service for AI coding sessions",
+  "bin": { "yocore": "bin/yocore" },
+  "scripts": { "postinstall": "node scripts/postinstall.js" },
+  "repository": { "type": "git", "url": "git+https://github.com/yologdev/yocore.git" },
+  "keywords": ["ai", "coding", "sessions", "mcp", "claude"],
+  "author": "Yolog Team",
+  "license": "MIT"
+}

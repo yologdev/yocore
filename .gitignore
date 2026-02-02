@@ -1,0 +1,10 @@
+/target/
+Cargo.lock
+.DS_Store
+*.swp
+npm/bin/darwin-*/
+npm/bin/linux-*/
+npm/bin/win32-*/
+npm/bin/yocore
+npm/bin/yocore.exe
+npm/node_modules/
