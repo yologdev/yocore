@@ -102,6 +102,43 @@ When running in MCP mode (`yocore --mcp`), the following tools are available:
 | `yolog_get_session_context` | Get session state with lifeboat pattern |
 | `yolog_save_lifeboat` | Save session state before context compaction |
 
+## Claude Code Integration
+
+For the best experience with Claude Code, use [yo-skills](https://github.com/yologdev/yo-skills) - a skill pack that provides easy access to Yocore's memory system.
+
+### Setup
+
+1. Start Yocore in MCP mode:
+   ```bash
+   yocore --mcp
+   ```
+
+2. Add to your Claude Code MCP config (`~/.claude/claude_desktop_config.json`):
+   ```json
+   {
+     "mcpServers": {
+       "yolog": {
+         "command": "yocore",
+         "args": ["--mcp"]
+       }
+     }
+   }
+   ```
+
+3. Install yo-skills for convenient slash commands:
+   ```bash
+   git clone https://github.com/yologdev/yo-skills ~/.claude/skills/yo-skills
+   ```
+
+### Available Skills
+
+| Skill | Description |
+|-------|-------------|
+| `/yo context` | Get session context + relevant memories |
+| `/yo project` | Get project-wide context |
+| `/yo search <query>` | Search memories by keyword |
+| `/yo search tag:<name>` | Filter by tag (e.g., `tag:bug`) |
+
 ## License
 
 MIT License - see [LICENSE](LICENSE) for details.
@@ -109,3 +146,4 @@ MIT License - see [LICENSE](LICENSE) for details.
 ## Links
 
 - [Yolog Desktop](https://github.com/yologdev/yolog) - GUI companion app
+- [yo-skills](https://github.com/yologdev/yo-skills) - Claude Code skill pack
