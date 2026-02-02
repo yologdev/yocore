@@ -106,24 +106,30 @@ pub async fn start_watcher(
         let project_id = format!("watch_{}", i);
         let mut tracked_files = HashMap::new();
 
-        // Scan existing files
-        if let Ok(entries) = std::fs::read_dir(path) {
-            for entry in entries.flatten() {
-                let file_path = entry.path();
-                if is_session_file(&file_path) {
-                    if let Some(stem) = file_path.file_stem().and_then(|s| s.to_str()) {
-                        let size = std::fs::metadata(&file_path).map(|m| m.len()).unwrap_or(0);
-                        tracked_files.insert(
-                            stem.to_string(),
-                            TrackedFile {
-                                path: file_path,
-                                last_known_size: size,
-                            },
-                        );
+        // Scan existing files recursively
+        fn scan_dir_recursive(dir: &PathBuf, tracked: &mut HashMap<String, TrackedFile>) {
+            if let Ok(entries) = std::fs::read_dir(dir) {
+                for entry in entries.flatten() {
+                    let file_path = entry.path();
+                    if file_path.is_dir() {
+                        // Recursively scan subdirectories
+                        scan_dir_recursive(&file_path, tracked);
+                    } else if is_session_file(&file_path) {
+                        if let Some(stem) = file_path.file_stem().and_then(|s| s.to_str()) {
+                            let size = std::fs::metadata(&file_path).map(|m| m.len()).unwrap_or(0);
+                            tracked.insert(
+                                stem.to_string(),
+                                TrackedFile {
+                                    path: file_path,
+                                    last_known_size: size,
+                                },
+                            );
+                        }
                     }
                 }
             }
         }
+        scan_dir_recursive(path, &mut tracked_files);
 
         let file_count = tracked_files.len();
         tracing::info!(
@@ -150,8 +156,10 @@ pub async fn start_watcher(
         event_tx,
     }));
 
-    // Create the debouncer
-    let state_clone = Arc::clone(&state);
+    // Create a channel to send events from notify thread to tokio runtime
+    let (notify_tx, mut notify_rx) = mpsc::channel::<PathBuf>(100);
+
+    // Create the debouncer - the callback runs in notify's thread, not tokio
     let debouncer_result = new_debouncer(
         Duration::from_millis(200),
         move |res: std::result::Result<
@@ -159,18 +167,23 @@ pub async fn start_watcher(
             notify::Error,
         >| {
             if let Ok(events) = res {
-                let state = Arc::clone(&state_clone);
-                // Spawn async handler
-                tokio::spawn(async move {
-                    for event in events {
-                        if event.kind == DebouncedEventKind::Any {
-                            handle_file_event(&state, &event.path).await;
-                        }
+                for event in events {
+                    if event.kind == DebouncedEventKind::Any {
+                        // Send path to tokio task via channel (non-blocking)
+                        let _ = notify_tx.try_send(event.path.clone());
                     }
-                });
+                }
             }
         },
     );
+
+    // Spawn tokio task to handle events from the channel
+    let state_for_handler = Arc::clone(&state);
+    tokio::spawn(async move {
+        while let Some(path) = notify_rx.recv().await {
+            handle_file_event(&state_for_handler, &path).await;
+        }
+    });
 
     let mut debouncer = match debouncer_result {
         Ok(d) => d,
@@ -260,15 +273,13 @@ async fn handle_file_event(state: &Arc<tokio::sync::RwLock<WatcherState>>, path:
         None => return,
     };
 
-    let parent_path = path.parent();
-
     let mut state_guard = state.write().await;
 
-    // Find which watched directory this file belongs to
+    // Find which watched directory this file belongs to (file must be within the watched folder)
     let watched_dir = state_guard
         .watched
         .values_mut()
-        .find(|d| parent_path == Some(&d.folder_path));
+        .find(|d| path.starts_with(&d.folder_path));
 
     let watched_dir = match watched_dir {
         Some(d) => d,
@@ -333,7 +344,7 @@ async fn handle_file_event(state: &Arc<tokio::sync::RwLock<WatcherState>>, path:
 
 /// Parse a session file and store in database
 async fn parse_session_file(
-    _db: &Arc<Database>,
+    db: &Arc<Database>,
     event_tx: &broadcast::Sender<WatcherEvent>,
     file_path: &str,
     session_id: &str,
@@ -371,10 +382,193 @@ async fn parse_session_file(
     let message_count = result.events.len();
     tracing::info!("Parsed session {}: {} messages", session_id, message_count);
 
-    // Store in database (TODO: implement session storage)
-    // For now, just emit the event
+    // Store session in database
+    if let Err(e) = store_session(db, file_path, session_id, parser_type, &result).await {
+        tracing::error!("Failed to store session {}: {}", session_id, e);
+        let _ = event_tx.send(WatcherEvent::Error {
+            file_path: file_path.to_string(),
+            error: format!("Failed to store session: {}", e),
+        });
+        return;
+    }
+
+    // Emit success event
     let _ = event_tx.send(WatcherEvent::SessionParsed {
         session_id: session_id.to_string(),
         message_count,
     });
+}
+
+/// Store a parsed session in the database
+async fn store_session(
+    db: &Arc<Database>,
+    file_path: &str,
+    session_id: &str,
+    parser_type: &str,
+    result: &crate::parser::ParseResult,
+) -> std::result::Result<(), String> {
+    use rusqlite::params;
+
+    let conn = db.conn();
+    let now = chrono::Utc::now().to_rfc3339();
+    let path = PathBuf::from(file_path);
+
+    // Get or create project from parent directory
+    let project_id = get_or_create_project(&conn, &path)?;
+
+    // Get file metadata
+    let file_size = std::fs::metadata(&path).map(|m| m.len() as i64).ok();
+    let file_modified = std::fs::metadata(&path)
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .map(|t| chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339());
+
+    // Determine AI tool name
+    let ai_tool = match parser_type {
+        "claude_code" | "claude-code" => "Claude Code",
+        "openclaw" => "OpenClaw",
+        "cursor" => "Cursor",
+        _ => parser_type,
+    };
+
+    // Insert or update session
+    conn.execute(
+        "INSERT INTO sessions (
+            id, project_id, file_path, title, ai_tool, message_count,
+            duration_ms, has_code, has_errors, file_size, file_modified,
+            created_at, indexed_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+        ON CONFLICT(id) DO UPDATE SET
+            message_count = ?6,
+            duration_ms = ?7,
+            has_code = ?8,
+            has_errors = ?9,
+            file_size = ?10,
+            file_modified = ?11,
+            indexed_at = ?13",
+        params![
+            session_id,
+            project_id,
+            file_path,
+            result.metadata.title,
+            ai_tool,
+            result.events.len() as i64,
+            result.metadata.duration_ms,
+            result.stats.has_code,
+            result.stats.has_errors,
+            file_size,
+            file_modified,
+            result.metadata.start_time.as_deref().unwrap_or(&now),
+            now,
+        ],
+    ).map_err(|e| format!("Failed to insert session: {}", e))?;
+
+    // Delete existing messages for this session (for re-indexing)
+    conn.execute(
+        "DELETE FROM session_messages WHERE session_id = ?",
+        params![session_id],
+    ).map_err(|e| format!("Failed to delete old messages: {}", e))?;
+
+    // Insert messages
+    for event in &result.events {
+        conn.execute(
+            "INSERT INTO session_messages (
+                session_id, sequence_num, role, content_preview, search_content,
+                has_code, has_error, has_file_changes, tool_name, tool_type, tool_summary,
+                byte_offset, byte_length, input_tokens, output_tokens,
+                cache_read_tokens, cache_creation_tokens, model, timestamp
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
+            params![
+                session_id,
+                event.sequence as i64,
+                event.role,
+                event.content_preview,
+                event.search_content,
+                event.has_code,
+                event.has_error,
+                event.has_file_changes,
+                event.tool_name,
+                event.tool_type,
+                event.tool_summary,
+                event.byte_offset,
+                event.byte_length,
+                event.input_tokens,
+                event.output_tokens,
+                event.cache_read_tokens,
+                event.cache_creation_tokens,
+                event.model,
+                event.timestamp,
+            ],
+        ).map_err(|e| format!("Failed to insert message {}: {}", event.sequence, e))?;
+    }
+
+    tracing::info!(
+        "Stored session {} with {} messages in project {}",
+        session_id,
+        result.events.len(),
+        project_id
+    );
+
+    Ok(())
+}
+
+/// Get or create a project for the given session file path
+fn get_or_create_project(
+    conn: &std::sync::MutexGuard<'_, rusqlite::Connection>,
+    session_path: &PathBuf,
+) -> std::result::Result<String, String> {
+    use rusqlite::params;
+
+    // Get parent directory as project folder
+    let folder_path = session_path
+        .parent()
+        .ok_or("Session file has no parent directory")?
+        .to_string_lossy()
+        .to_string();
+
+    // Derive project name from folder name (e.g., "-Users-yuanhao-vibedev-yolog" -> "yolog")
+    let folder_name = session_path
+        .parent()
+        .and_then(|p| p.file_name())
+        .and_then(|n| n.to_str())
+        .unwrap_or("Unknown");
+
+    // Extract meaningful name from path-based folder name
+    let project_name = if folder_name.starts_with('-') {
+        // Claude Code style: "-Users-yuanhao-vibedev-yolog" -> last segment
+        folder_name
+            .split('-')
+            .filter(|s| !s.is_empty())
+            .last()
+            .unwrap_or(folder_name)
+    } else {
+        folder_name
+    };
+
+    // Check if project already exists
+    let existing_id: Option<String> = conn
+        .query_row(
+            "SELECT id FROM projects WHERE folder_path = ?",
+            params![folder_path],
+            |row| row.get(0),
+        )
+        .ok();
+
+    if let Some(id) = existing_id {
+        return Ok(id);
+    }
+
+    // Create new project
+    let project_id = uuid::Uuid::new_v4().to_string();
+    let now = chrono::Utc::now().to_rfc3339();
+
+    conn.execute(
+        "INSERT INTO projects (id, name, folder_path, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![project_id, project_name, folder_path, now, now],
+    ).map_err(|e| format!("Failed to create project: {}", e))?;
+
+    tracing::info!("Created project '{}' for {}", project_name, folder_path);
+
+    Ok(project_id)
 }
