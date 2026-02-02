@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::mpsc;
+use tokio::sync::{broadcast, mpsc};
 
 /// Events emitted by the file watcher
 #[derive(Debug, Clone)]
@@ -44,8 +44,6 @@ pub enum WatcherEvent {
 pub struct WatcherHandle {
     /// Shutdown signal sender
     shutdown_tx: mpsc::Sender<()>,
-    /// Event receiver (for SSE broadcasting)
-    pub event_rx: mpsc::Receiver<WatcherEvent>,
 }
 
 impl WatcherHandle {
@@ -78,23 +76,23 @@ struct WatcherState {
     watched: HashMap<String, WatchedDirectory>,
     /// Database connection
     db: Arc<Database>,
-    /// Event sender
-    event_tx: mpsc::Sender<WatcherEvent>,
+    /// Broadcast event sender (for SSE)
+    event_tx: broadcast::Sender<WatcherEvent>,
 }
 
 /// Start watching configured paths for session files
-pub async fn start_watcher(config: &Config, db: Arc<Database>) -> Result<WatcherHandle> {
-    let (event_tx, event_rx) = mpsc::channel(100);
+pub async fn start_watcher(
+    config: &Config,
+    db: Arc<Database>,
+    event_tx: broadcast::Sender<WatcherEvent>,
+) -> Result<WatcherHandle> {
     let (shutdown_tx, mut shutdown_rx) = mpsc::channel::<()>(1);
 
     let watch_paths = config.watch_paths();
 
     if watch_paths.is_empty() {
         tracing::info!("No watch paths configured, file watcher idle");
-        return Ok(WatcherHandle {
-            shutdown_tx,
-            event_rx,
-        });
+        return Ok(WatcherHandle { shutdown_tx });
     }
 
     // Initialize watched directories
@@ -178,10 +176,7 @@ pub async fn start_watcher(config: &Config, db: Arc<Database>) -> Result<Watcher
         Ok(d) => d,
         Err(e) => {
             tracing::error!("Failed to create file watcher: {}", e);
-            return Ok(WatcherHandle {
-                shutdown_tx,
-                event_rx,
-            });
+            return Ok(WatcherHandle { shutdown_tx });
         }
     };
 
@@ -212,10 +207,7 @@ pub async fn start_watcher(config: &Config, db: Arc<Database>) -> Result<Watcher
         tracing::info!("File watcher stopped");
     });
 
-    Ok(WatcherHandle {
-        shutdown_tx,
-        event_rx,
-    })
+    Ok(WatcherHandle { shutdown_tx })
 }
 
 /// Check if a file is a main session file (not an agent file)
@@ -301,7 +293,7 @@ async fn handle_file_event(state: &Arc<tokio::sync::RwLock<WatcherState>>, path:
                 new_size,
             };
 
-            let _ = state_guard.event_tx.send(event).await;
+            let _ = state_guard.event_tx.send(event);
             tracing::debug!(
                 "Session file changed: {} ({} -> {} bytes)",
                 file_stem,
@@ -325,7 +317,7 @@ async fn handle_file_event(state: &Arc<tokio::sync::RwLock<WatcherState>>, path:
             file_name: file_name.clone(),
         };
 
-        let _ = state_guard.event_tx.send(event).await;
+        let _ = state_guard.event_tx.send(event);
         tracing::info!("New session detected: {} in {}", file_name, project_id);
 
         // Parse the new file
@@ -342,7 +334,7 @@ async fn handle_file_event(state: &Arc<tokio::sync::RwLock<WatcherState>>, path:
 /// Parse a session file and store in database
 async fn parse_session_file(
     _db: &Arc<Database>,
-    event_tx: &mpsc::Sender<WatcherEvent>,
+    event_tx: &broadcast::Sender<WatcherEvent>,
     file_path: &str,
     session_id: &str,
     parser_type: &str,
@@ -353,12 +345,10 @@ async fn parse_session_file(
     let content = match std::fs::read_to_string(&path) {
         Ok(c) => c,
         Err(e) => {
-            let _ = event_tx
-                .send(WatcherEvent::Error {
-                    file_path: file_path.to_string(),
-                    error: format!("Failed to read file: {}", e),
-                })
-                .await;
+            let _ = event_tx.send(WatcherEvent::Error {
+                file_path: file_path.to_string(),
+                error: format!("Failed to read file: {}", e),
+            });
             return;
         }
     };
@@ -383,10 +373,8 @@ async fn parse_session_file(
 
     // Store in database (TODO: implement session storage)
     // For now, just emit the event
-    let _ = event_tx
-        .send(WatcherEvent::SessionParsed {
-            session_id: session_id.to_string(),
-            message_count,
-        })
-        .await;
+    let _ = event_tx.send(WatcherEvent::SessionParsed {
+        session_id: session_id.to_string(),
+        message_count,
+    });
 }

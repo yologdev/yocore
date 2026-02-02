@@ -9,6 +9,7 @@ mod sse;
 use crate::config::Config;
 use crate::db::Database;
 use crate::error::Result;
+use crate::watcher::WatcherEvent;
 
 use axum::{
     middleware,
@@ -17,6 +18,7 @@ use axum::{
 };
 use std::net::SocketAddr;
 use std::sync::Arc;
+use tokio::sync::broadcast;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 
@@ -25,13 +27,21 @@ use tower_http::trace::TraceLayer;
 pub struct AppState {
     pub db: Arc<Database>,
     pub api_key: Option<String>,
+    /// Broadcast channel for SSE events from watcher
+    pub event_tx: broadcast::Sender<WatcherEvent>,
 }
 
 /// Start the HTTP API server
-pub async fn serve(addr: SocketAddr, db: Arc<Database>, config: &Config) -> Result<()> {
+pub async fn serve(
+    addr: SocketAddr,
+    db: Arc<Database>,
+    config: &Config,
+    event_tx: broadcast::Sender<WatcherEvent>,
+) -> Result<()> {
     let state = AppState {
         db,
         api_key: config.server.api_key.clone(),
+        event_tx,
     };
 
     let app = create_router(state);

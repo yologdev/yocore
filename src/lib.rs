@@ -38,7 +38,7 @@ pub use db::Database;
 pub use error::{CoreError, Result};
 
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{broadcast, RwLock};
 
 /// Core service that coordinates all Yolog functionality
 pub struct Core {
@@ -50,6 +50,9 @@ pub struct Core {
 
     /// File watcher state (optional, only when watching is active)
     watcher_handle: RwLock<Option<watcher::WatcherHandle>>,
+
+    /// Broadcast channel for SSE events (from watcher to API clients)
+    event_tx: broadcast::Sender<watcher::WatcherEvent>,
 }
 
 impl Core {
@@ -57,26 +60,35 @@ impl Core {
     pub fn new(config: Config) -> Result<Self> {
         let db_path = config.data_dir().join("yolog.db");
         let db = Database::new(db_path)?;
+        let (event_tx, _) = broadcast::channel(256);
 
         Ok(Core {
             config,
             db: Arc::new(db),
             watcher_handle: RwLock::new(None),
+            event_tx,
         })
     }
 
     /// Create a Core instance with an existing database (for Desktop embedding)
     pub fn with_database(config: Config, db: Arc<Database>) -> Self {
+        let (event_tx, _) = broadcast::channel(256);
         Core {
             config,
             db,
             watcher_handle: RwLock::new(None),
+            event_tx,
         }
     }
 
     /// Start the file watcher for configured watch paths
     pub async fn start_watching(&self) -> Result<()> {
-        let handle = watcher::start_watcher(&self.config, self.db.clone()).await?;
+        let handle = watcher::start_watcher(
+            &self.config,
+            self.db.clone(),
+            self.event_tx.clone(),
+        )
+        .await?;
         *self.watcher_handle.write().await = Some(handle);
         Ok(())
     }
@@ -93,7 +105,7 @@ impl Core {
     pub async fn start_api_server(&self) -> Result<()> {
         let addr = self.config.server_addr();
         tracing::info!("Starting API server on {}", addr);
-        api::serve(addr, self.db.clone(), &self.config).await
+        api::serve(addr, self.db.clone(), &self.config, self.event_tx.clone()).await
     }
 
     /// Get a reference to the database
