@@ -547,11 +547,12 @@ pub async fn get_session_messages(
     let result = state
         .db
         .with_conn(move |conn| {
+            let session_id_clone = session_id.clone();
             let mut stmt = conn.prepare(
-                "SELECT id, sequence_num, role, content_preview, has_code, has_error,
+                "SELECT id, sequence_num, role, content_preview, search_content, has_code, has_error,
                         has_file_changes, tool_name, tool_type, tool_summary,
-                        input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
-                        model, timestamp
+                        byte_offset, byte_length, input_tokens, output_tokens,
+                        cache_read_tokens, cache_creation_tokens, model, timestamp
                  FROM session_messages
                  WHERE session_id = ?
                  ORDER BY sequence_num
@@ -562,21 +563,25 @@ pub async fn get_session_messages(
                 .query_map(rusqlite::params![session_id, limit, offset], |row| {
                     Ok(serde_json::json!({
                         "id": row.get::<_, i64>(0)?,
+                        "session_id": session_id_clone,
                         "sequence_num": row.get::<_, i64>(1)?,
                         "role": row.get::<_, String>(2)?,
                         "content_preview": row.get::<_, Option<String>>(3)?,
-                        "has_code": row.get::<_, bool>(4)?,
-                        "has_error": row.get::<_, bool>(5)?,
-                        "has_file_changes": row.get::<_, bool>(6)?,
-                        "tool_name": row.get::<_, Option<String>>(7)?,
-                        "tool_type": row.get::<_, Option<String>>(8)?,
-                        "tool_summary": row.get::<_, Option<String>>(9)?,
-                        "input_tokens": row.get::<_, Option<i64>>(10)?,
-                        "output_tokens": row.get::<_, Option<i64>>(11)?,
-                        "cache_read_tokens": row.get::<_, Option<i64>>(12)?,
-                        "cache_creation_tokens": row.get::<_, Option<i64>>(13)?,
-                        "model": row.get::<_, Option<String>>(14)?,
-                        "timestamp": row.get::<_, String>(15)?,
+                        "search_content": row.get::<_, Option<String>>(4)?,
+                        "has_code": row.get::<_, bool>(5)?,
+                        "has_error": row.get::<_, bool>(6)?,
+                        "has_file_changes": row.get::<_, bool>(7)?,
+                        "tool_name": row.get::<_, Option<String>>(8)?,
+                        "tool_type": row.get::<_, Option<String>>(9)?,
+                        "tool_summary": row.get::<_, Option<String>>(10)?,
+                        "byte_offset": row.get::<_, i64>(11)?,
+                        "byte_length": row.get::<_, i64>(12)?,
+                        "input_tokens": row.get::<_, Option<i64>>(13)?,
+                        "output_tokens": row.get::<_, Option<i64>>(14)?,
+                        "cache_read_tokens": row.get::<_, Option<i64>>(15)?,
+                        "cache_creation_tokens": row.get::<_, Option<i64>>(16)?,
+                        "model": row.get::<_, Option<String>>(17)?,
+                        "timestamp": row.get::<_, String>(18)?,
                     }))
                 })?
                 .filter_map(|r| r.ok())
