@@ -314,6 +314,16 @@ async fn handle_file_event(state: &Arc<tokio::sync::RwLock<WatcherState>>, path:
                 previous_size,
                 new_size
             );
+
+            // Re-parse the file to update message count, duration, etc.
+            let db = Arc::clone(&state_guard.db);
+            let event_tx = state_guard.event_tx.clone();
+
+            // Drop the lock before parsing
+            drop(state_guard);
+
+            parse_session_file(&db, &event_tx, &path_str, &file_stem, &parser_type).await;
+            return; // Exit early since we dropped the lock
         }
     } else {
         // New file - track it
