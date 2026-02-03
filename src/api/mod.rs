@@ -3,9 +3,11 @@
 //! Provides REST API endpoints for sessions, projects, memories, and search.
 
 mod auth;
-mod routes;
+pub mod routes;
 mod sse;
 
+use crate::ai::queue::AiTaskQueue;
+use crate::ai::types::AiEvent;
 use crate::config::Config;
 use crate::db::Database;
 use crate::error::Result;
@@ -29,6 +31,10 @@ pub struct AppState {
     pub api_key: Option<String>,
     /// Broadcast channel for SSE events from watcher
     pub event_tx: broadcast::Sender<WatcherEvent>,
+    /// Broadcast channel for AI-related SSE events
+    pub ai_event_tx: broadcast::Sender<AiEvent>,
+    /// AI task queue for concurrency control
+    pub ai_task_queue: AiTaskQueue,
 }
 
 /// Start the HTTP API server
@@ -37,11 +43,15 @@ pub async fn serve(
     db: Arc<Database>,
     config: &Config,
     event_tx: broadcast::Sender<WatcherEvent>,
+    ai_event_tx: broadcast::Sender<AiEvent>,
+    ai_task_queue: AiTaskQueue,
 ) -> Result<()> {
     let state = AppState {
         db,
         api_key: config.server.api_key.clone(),
         event_tx,
+        ai_event_tx,
+        ai_task_queue,
     };
 
     let app = create_router(state);
@@ -92,6 +102,11 @@ fn create_router(state: AppState) -> Router {
         .route("/memories/:id", get(routes::get_memory))
         .route("/memories/:id", patch(routes::update_memory))
         .route("/memories/:id", delete(routes::delete_memory))
+        // AI Features
+        .route("/ai/sessions/:id/title", post(routes::trigger_title_generation))
+        .route("/ai/sessions/:id/memories", post(routes::trigger_memory_extraction))
+        .route("/ai/sessions/:id/skills", post(routes::trigger_skill_extraction))
+        .route("/ai/cli/status", get(routes::get_ai_cli_status))
         // Server-Sent Events
         .route("/events", get(sse::events_handler))
         // Apply auth middleware to all API routes

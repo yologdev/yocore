@@ -1198,3 +1198,348 @@ pub async fn delete_memory(
             .into_response(),
     }
 }
+
+// ============================================================================
+// AI Features
+// ============================================================================
+
+use crate::ai::cli::detect_claude_code;
+use crate::ai::title::{generate_title, store_title};
+use crate::ai::types::AiEvent;
+
+/// Get AI CLI detection status
+pub async fn get_ai_cli_status() -> impl IntoResponse {
+    let detected = detect_claude_code().await;
+    Json(serde_json::json!({
+        "provider": "claude_code",
+        "installed": detected.installed,
+        "path": detected.path,
+        "version": detected.version,
+    }))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TitleGenerationRequest {
+    #[serde(default)]
+    pub force: bool,
+}
+
+/// Trigger title generation for a session (async, returns immediately)
+pub async fn trigger_title_generation(
+    State(state): State<AppState>,
+    Path(session_id): Path<String>,
+    body: Option<Json<TitleGenerationRequest>>,
+) -> impl IntoResponse {
+    let force = body.map(|b| b.force).unwrap_or(false);
+
+    // Check if session exists and has title (unless force)
+    if !force {
+        let session_id_clone = session_id.clone();
+        let has_title = state
+            .db
+            .with_conn(move |conn| {
+                conn.query_row(
+                    "SELECT title FROM sessions WHERE id = ?",
+                    [&session_id_clone],
+                    |row| {
+                        let title: Option<String> = row.get(0)?;
+                        Ok(title.is_some() && title.unwrap().len() > 0)
+                    },
+                )
+            })
+            .await;
+
+        match has_title {
+            Ok(true) => {
+                return (
+                    StatusCode::OK,
+                    Json(serde_json::json!({
+                        "status": "skipped",
+                        "message": "Session already has a title"
+                    })),
+                )
+                    .into_response()
+            }
+            Err(rusqlite::Error::QueryReturnedNoRows) => {
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(serde_json::json!({ "error": "Session not found" })),
+                )
+                    .into_response()
+            }
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": e.to_string() })),
+                )
+                    .into_response()
+            }
+            Ok(false) => {} // Continue with generation
+        }
+    }
+
+    // Acquire task queue permit
+    let permit = match state.ai_task_queue.acquire().await {
+        Ok(p) => p,
+        Err(e) => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({ "error": e })),
+            )
+                .into_response()
+        }
+    };
+
+    // Clone values for the spawned task
+    let db = state.db.clone();
+    let ai_event_tx = state.ai_event_tx.clone();
+    let session_id_for_task = session_id.clone();
+
+    // Spawn background task for title generation
+    tokio::spawn(async move {
+        // Keep permit alive during task execution
+        let _permit = permit;
+
+        // Emit start event
+        let _ = ai_event_tx.send(AiEvent::TitleStart {
+            session_id: session_id_for_task.clone(),
+        });
+
+        // Generate title
+        let result = generate_title(&db, &session_id_for_task, None).await;
+
+        // Store result and emit event
+        if let Some(ref title) = result.title {
+            if let Err(e) = store_title(&db, &session_id_for_task, title).await {
+                tracing::error!("Failed to store title: {}", e);
+                let _ = ai_event_tx.send(AiEvent::TitleError {
+                    session_id: session_id_for_task,
+                    error: format!("Failed to store title: {}", e),
+                });
+                return;
+            }
+            let _ = ai_event_tx.send(AiEvent::TitleComplete {
+                session_id: session_id_for_task,
+                title: title.clone(),
+            });
+        } else if let Some(error) = result.error {
+            let _ = ai_event_tx.send(AiEvent::TitleError {
+                session_id: session_id_for_task,
+                error,
+            });
+        }
+    });
+
+    // Return immediately with 202 Accepted
+    (
+        StatusCode::ACCEPTED,
+        Json(serde_json::json!({
+            "status": "started",
+            "session_id": session_id,
+            "message": "Title generation started. Listen to SSE for progress."
+        })),
+    )
+        .into_response()
+}
+
+#[derive(Debug, Deserialize)]
+pub struct MemoryExtractionRequest {
+    #[serde(default)]
+    pub force: bool,
+}
+
+/// Trigger memory extraction for a session (async, returns immediately)
+pub async fn trigger_memory_extraction(
+    State(state): State<AppState>,
+    Path(session_id): Path<String>,
+    body: Option<Json<MemoryExtractionRequest>>,
+) -> impl IntoResponse {
+    let _force = body.map(|b| b.force).unwrap_or(false);
+
+    // Verify session exists
+    let session_id_clone = session_id.clone();
+    let session_exists = state
+        .db
+        .with_conn(move |conn| {
+            conn.query_row(
+                "SELECT 1 FROM sessions WHERE id = ?",
+                [&session_id_clone],
+                |_| Ok(true),
+            )
+        })
+        .await;
+
+    match session_exists {
+        Err(rusqlite::Error::QueryReturnedNoRows) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": "Session not found" })),
+            )
+                .into_response()
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response()
+        }
+        Ok(_) => {}
+    }
+
+    // Acquire task queue permit
+    let permit = match state.ai_task_queue.acquire().await {
+        Ok(p) => p,
+        Err(e) => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({ "error": e })),
+            )
+                .into_response()
+        }
+    };
+
+    // Clone values for the spawned task
+    let db = state.db.clone();
+    let ai_event_tx = state.ai_event_tx.clone();
+    let session_id_for_task = session_id.clone();
+
+    // Spawn background task for memory extraction
+    tokio::spawn(async move {
+        // Keep permit alive during task execution
+        let _permit = permit;
+
+        // Emit start event
+        let _ = ai_event_tx.send(AiEvent::MemoryStart {
+            session_id: session_id_for_task.clone(),
+        });
+
+        // Extract memories
+        let result = crate::ai::extract_memories(&db, &session_id_for_task, None).await;
+
+        // Emit completion or error event
+        if let Some(error) = result.error {
+            let _ = ai_event_tx.send(AiEvent::MemoryError {
+                session_id: session_id_for_task,
+                error,
+            });
+        } else {
+            let _ = ai_event_tx.send(AiEvent::MemoryComplete {
+                session_id: session_id_for_task,
+                count: result.memories_extracted,
+            });
+        }
+    });
+
+    // Return immediately with 202 Accepted
+    (
+        StatusCode::ACCEPTED,
+        Json(serde_json::json!({
+            "status": "started",
+            "session_id": session_id,
+            "message": "Memory extraction started. Listen to SSE for progress."
+        })),
+    )
+        .into_response()
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SkillExtractionRequest {
+    #[serde(default)]
+    pub force: bool,
+}
+
+/// Trigger skill extraction for a session (async, returns immediately)
+pub async fn trigger_skill_extraction(
+    State(state): State<AppState>,
+    Path(session_id): Path<String>,
+    body: Option<Json<SkillExtractionRequest>>,
+) -> impl IntoResponse {
+    let _force = body.map(|b| b.force).unwrap_or(false);
+
+    // Verify session exists
+    let session_id_clone = session_id.clone();
+    let session_exists = state
+        .db
+        .with_conn(move |conn| {
+            conn.query_row(
+                "SELECT 1 FROM sessions WHERE id = ?",
+                [&session_id_clone],
+                |_| Ok(true),
+            )
+        })
+        .await;
+
+    match session_exists {
+        Err(rusqlite::Error::QueryReturnedNoRows) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": "Session not found" })),
+            )
+                .into_response()
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response()
+        }
+        Ok(_) => {}
+    }
+
+    // Acquire task queue permit
+    let permit = match state.ai_task_queue.acquire().await {
+        Ok(p) => p,
+        Err(e) => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({ "error": e })),
+            )
+                .into_response()
+        }
+    };
+
+    // Clone values for the spawned task
+    let db = state.db.clone();
+    let ai_event_tx = state.ai_event_tx.clone();
+    let session_id_for_task = session_id.clone();
+
+    // Spawn background task for skill extraction
+    tokio::spawn(async move {
+        // Keep permit alive during task execution
+        let _permit = permit;
+
+        // Emit start event
+        let _ = ai_event_tx.send(AiEvent::SkillStart {
+            session_id: session_id_for_task.clone(),
+        });
+
+        // Extract skills
+        let result = crate::ai::extract_skills(&db, &session_id_for_task, None).await;
+
+        // Emit completion or error event
+        if let Some(error) = result.error {
+            let _ = ai_event_tx.send(AiEvent::SkillError {
+                session_id: session_id_for_task,
+                error,
+            });
+        } else {
+            let _ = ai_event_tx.send(AiEvent::SkillComplete {
+                session_id: session_id_for_task,
+                count: result.skills_extracted,
+            });
+        }
+    });
+
+    // Return immediately with 202 Accepted
+    (
+        StatusCode::ACCEPTED,
+        Json(serde_json::json!({
+            "status": "started",
+            "session_id": session_id,
+            "message": "Skill extraction started. Listen to SSE for progress."
+        })),
+    )
+        .into_response()
+}

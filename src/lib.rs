@@ -5,6 +5,7 @@
 //! - SQLite storage with FTS5 search
 //! - HTTP API for remote access
 //! - MCP server integration for AI assistants
+//! - AI features (title generation, memory/skill extraction)
 //!
 //! # Usage
 //!
@@ -22,6 +23,7 @@
 //! yocore --config ~/.yolog/config.toml
 //! ```
 
+pub mod ai;
 pub mod api;
 pub mod config;
 pub mod db;
@@ -37,6 +39,8 @@ pub use config::Config;
 pub use db::Database;
 pub use error::{CoreError, Result};
 
+use ai::queue::AiTaskQueue;
+use ai::types::AiEvent;
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
 
@@ -53,6 +57,12 @@ pub struct Core {
 
     /// Broadcast channel for SSE events (from watcher to API clients)
     event_tx: broadcast::Sender<watcher::WatcherEvent>,
+
+    /// Broadcast channel for AI-related SSE events
+    ai_event_tx: broadcast::Sender<AiEvent>,
+
+    /// AI task queue for concurrency control
+    ai_task_queue: AiTaskQueue,
 }
 
 impl Core {
@@ -61,23 +71,31 @@ impl Core {
         let db_path = config.data_dir().join("yolog.db");
         let db = Database::new(db_path)?;
         let (event_tx, _) = broadcast::channel(256);
+        let (ai_event_tx, _) = broadcast::channel(256);
+        let ai_task_queue = AiTaskQueue::new(3);
 
         Ok(Core {
             config,
             db: Arc::new(db),
             watcher_handle: RwLock::new(None),
             event_tx,
+            ai_event_tx,
+            ai_task_queue,
         })
     }
 
     /// Create a Core instance with an existing database (for Desktop embedding)
     pub fn with_database(config: Config, db: Arc<Database>) -> Self {
         let (event_tx, _) = broadcast::channel(256);
+        let (ai_event_tx, _) = broadcast::channel(256);
+        let ai_task_queue = AiTaskQueue::new(3);
         Core {
             config,
             db,
             watcher_handle: RwLock::new(None),
             event_tx,
+            ai_event_tx,
+            ai_task_queue,
         }
     }
 
@@ -105,7 +123,25 @@ impl Core {
     pub async fn start_api_server(&self) -> Result<()> {
         let addr = self.config.server_addr();
         tracing::info!("Starting API server on {}", addr);
-        api::serve(addr, self.db.clone(), &self.config, self.event_tx.clone()).await
+        api::serve(
+            addr,
+            self.db.clone(),
+            &self.config,
+            self.event_tx.clone(),
+            self.ai_event_tx.clone(),
+            self.ai_task_queue.clone(),
+        )
+        .await
+    }
+
+    /// Get the AI event broadcaster (for emitting AI events)
+    pub fn ai_event_tx(&self) -> &broadcast::Sender<AiEvent> {
+        &self.ai_event_tx
+    }
+
+    /// Get the AI task queue
+    pub fn ai_task_queue(&self) -> &AiTaskQueue {
+        &self.ai_task_queue
     }
 
     /// Get a reference to the database
