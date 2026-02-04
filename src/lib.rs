@@ -148,4 +148,100 @@ impl Core {
     pub fn database(&self) -> &Arc<Database> {
         &self.db
     }
+
+    /// Start periodic memory ranking background task
+    ///
+    /// This spawns a background task that runs memory ranking on all projects
+    /// at the configured interval (default: every 6 hours).
+    pub fn start_periodic_ranking(&self) {
+        let ranking_config = &self.config.ai.features.ranking;
+
+        if !ranking_config.enabled {
+            tracing::info!("Memory ranking is disabled");
+            return;
+        }
+
+        let interval_hours = ranking_config.interval_hours;
+        let batch_size = ranking_config.batch_size;
+        let db = self.db.clone();
+        let event_tx = self.event_tx.clone();
+
+        tracing::info!(
+            "Starting periodic memory ranking (every {} hours, batch size {})",
+            interval_hours,
+            batch_size
+        );
+
+        tokio::spawn(async move {
+            use std::time::Duration;
+
+            let interval = Duration::from_secs(interval_hours as u64 * 3600);
+            let mut ticker = tokio::time::interval(interval);
+
+            // Skip the first immediate tick
+            ticker.tick().await;
+
+            loop {
+                ticker.tick().await;
+                tracing::info!("Running periodic memory ranking sweep");
+
+                // Get all project IDs
+                let project_ids: Vec<String> = {
+                    let conn = db.conn();
+                    conn.prepare("SELECT id FROM projects")
+                        .and_then(|mut stmt| {
+                            stmt.query_map([], |row| row.get(0))
+                                .map(|rows| rows.filter_map(|r| r.ok()).collect())
+                        })
+                        .unwrap_or_default()
+                };
+
+                for project_id in project_ids {
+                    // Emit start event
+                    let _ = event_tx.send(watcher::WatcherEvent::RankingStart {
+                        project_id: project_id.clone(),
+                    });
+
+                    match ai::ranking::rank_project_memories(&db, &project_id, batch_size) {
+                        Ok(result) => {
+                            if result.memories_evaluated > 0 {
+                                tracing::info!(
+                                    "Ranked project {}: {} evaluated, {} promoted, {} demoted, {} removed",
+                                    project_id,
+                                    result.memories_evaluated,
+                                    result.promoted,
+                                    result.demoted,
+                                    result.removed
+                                );
+                            }
+
+                            // Emit complete event
+                            let _ = event_tx.send(watcher::WatcherEvent::RankingComplete {
+                                project_id: project_id.clone(),
+                                promoted: result.promoted,
+                                demoted: result.demoted,
+                                removed: result.removed,
+                            });
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to rank project {}: {}", project_id, e);
+
+                            // Emit error event
+                            let _ = event_tx.send(watcher::WatcherEvent::RankingError {
+                                project_id: project_id.clone(),
+                                error: e,
+                            });
+                        }
+                    }
+                }
+
+                tracing::info!("Periodic memory ranking sweep complete");
+            }
+        });
+    }
+
+    /// Get the event sender for broadcasting events
+    pub fn event_sender(&self) -> broadcast::Sender<watcher::WatcherEvent> {
+        self.event_tx.clone()
+    }
 }

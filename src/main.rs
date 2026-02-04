@@ -102,6 +102,9 @@ async fn main() -> anyhow::Result<()> {
             core.start_watching().await?;
         }
 
+        // Start periodic memory ranking background task
+        core.start_periodic_ranking();
+
         // Start API server (blocks until shutdown)
         core.start_api_server().await?;
     }

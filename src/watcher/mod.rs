@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{broadcast, mpsc};
 
-/// Events emitted by the file watcher
+/// Events emitted by the file watcher and other core services
 #[derive(Debug, Clone)]
 pub enum WatcherEvent {
     /// New session file detected
@@ -38,6 +38,17 @@ pub enum WatcherEvent {
     },
     /// Error during processing
     Error { file_path: String, error: String },
+    /// Memory ranking started
+    RankingStart { project_id: String },
+    /// Memory ranking completed
+    RankingComplete {
+        project_id: String,
+        promoted: usize,
+        demoted: usize,
+        removed: usize,
+    },
+    /// Memory ranking error
+    RankingError { project_id: String, error: String },
 }
 
 /// Handle for controlling the file watcher

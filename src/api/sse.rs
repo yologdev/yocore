@@ -64,6 +64,17 @@ pub enum SseEvent {
     AiMarkerComplete { session_id: String, count: usize },
     /// Marker detection failed
     AiMarkerError { session_id: String, error: String },
+    /// Memory ranking started
+    RankingStart { project_id: String },
+    /// Memory ranking completed
+    RankingComplete {
+        project_id: String,
+        promoted: usize,
+        demoted: usize,
+        removed: usize,
+    },
+    /// Memory ranking error
+    RankingError { project_id: String, error: String },
 }
 
 impl From<WatcherEvent> for SseEvent {
@@ -98,6 +109,21 @@ impl From<WatcherEvent> for SseEvent {
             },
             WatcherEvent::Error { file_path, error } => {
                 SseEvent::WatcherError { file_path, error }
+            }
+            WatcherEvent::RankingStart { project_id } => SseEvent::RankingStart { project_id },
+            WatcherEvent::RankingComplete {
+                project_id,
+                promoted,
+                demoted,
+                removed,
+            } => SseEvent::RankingComplete {
+                project_id,
+                promoted,
+                demoted,
+                removed,
+            },
+            WatcherEvent::RankingError { project_id, error } => {
+                SseEvent::RankingError { project_id, error }
             }
         }
     }
@@ -159,6 +185,10 @@ fn get_event_type(event: &SseEvent) -> &'static str {
         SseEvent::AiMarkerStart { .. } => "ai:markers:start",
         SseEvent::AiMarkerComplete { .. } => "ai:markers:complete",
         SseEvent::AiMarkerError { .. } => "ai:markers:error",
+        // Ranking events
+        SseEvent::RankingStart { .. } => "ai:ranking:start",
+        SseEvent::RankingComplete { .. } => "ai:ranking:complete",
+        SseEvent::RankingError { .. } => "ai:ranking:error",
     }
 }
 

@@ -1749,3 +1749,139 @@ pub async fn trigger_marker_detection(
     )
         .into_response()
 }
+
+// ============================================================================
+// Memory Ranking
+// ============================================================================
+
+#[derive(Debug, Deserialize)]
+pub struct RankMemoriesQuery {
+    pub batch_size: Option<usize>,
+}
+
+/// Trigger memory ranking for a project
+pub async fn rank_project_memories(
+    State(state): State<AppState>,
+    Path(project_id): Path<String>,
+    Query(query): Query<RankMemoriesQuery>,
+) -> impl IntoResponse {
+    let batch_size = query.batch_size.unwrap_or(500);
+    let project_id_clone = project_id.clone();
+
+    // Verify project exists
+    let exists = state
+        .db
+        .with_conn(move |conn| {
+            conn.query_row(
+                "SELECT 1 FROM projects WHERE id = ?",
+                [&project_id_clone],
+                |_| Ok(true),
+            )
+            .unwrap_or(false)
+        })
+        .await;
+
+    if !exists {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": "Project not found"
+            })),
+        )
+            .into_response();
+    }
+
+    // Run ranking in spawn_blocking since it uses sync database access
+    let db = state.db.clone();
+    let project_id_for_ranking = project_id.clone();
+
+    let result = tokio::task::spawn_blocking(move || {
+        crate::ai::ranking::rank_project_memories(&db, &project_id_for_ranking, batch_size)
+    })
+    .await;
+
+    match result {
+        Ok(Ok(ranking_result)) => Json(serde_json::json!({
+            "project_id": ranking_result.project_id,
+            "memories_evaluated": ranking_result.memories_evaluated,
+            "promoted": ranking_result.promoted,
+            "demoted": ranking_result.demoted,
+            "removed": ranking_result.removed,
+            "unchanged": ranking_result.unchanged,
+            "transitions": ranking_result.transitions,
+        }))
+        .into_response(),
+        Ok(Err(e)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": e
+            })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": format!("Task panicked: {}", e)
+            })),
+        )
+            .into_response(),
+    }
+}
+
+/// Get ranking statistics for a project
+pub async fn get_ranking_stats(
+    State(state): State<AppState>,
+    Path(project_id): Path<String>,
+) -> impl IntoResponse {
+    let project_id_clone = project_id.clone();
+
+    // Verify project exists
+    let exists = state
+        .db
+        .with_conn(move |conn| {
+            conn.query_row(
+                "SELECT 1 FROM projects WHERE id = ?",
+                [&project_id_clone],
+                |_| Ok(true),
+            )
+            .unwrap_or(false)
+        })
+        .await;
+
+    if !exists {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": "Project not found"
+            })),
+        )
+            .into_response();
+    }
+
+    // Run stats query in spawn_blocking since it uses sync database access
+    let db = state.db.clone();
+    let project_id_for_stats = project_id.clone();
+
+    let result = tokio::task::spawn_blocking(move || {
+        crate::ai::ranking::get_ranking_stats(&db, &project_id_for_stats)
+    })
+    .await;
+
+    match result {
+        Ok(Ok(stats)) => Json(stats).into_response(),
+        Ok(Err(e)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": e
+            })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": format!("Task panicked: {}", e)
+            })),
+        )
+            .into_response(),
+    }
+}
