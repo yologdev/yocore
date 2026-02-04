@@ -93,6 +93,7 @@ fn create_router(state: AppState) -> Router {
             "/sessions/:id/messages/:seq/content",
             get(routes::get_message_content),
         )
+        .route("/sessions/:id/markers", get(routes::get_session_markers))
         .route("/sessions/:id/search", get(routes::search_session))
         // Search
         .route("/search", post(routes::search))
@@ -102,10 +103,13 @@ fn create_router(state: AppState) -> Router {
         .route("/memories/:id", get(routes::get_memory))
         .route("/memories/:id", patch(routes::update_memory))
         .route("/memories/:id", delete(routes::delete_memory))
+        // Markers
+        .route("/markers/:id", delete(routes::delete_marker))
         // AI Features
         .route("/ai/sessions/:id/title", post(routes::trigger_title_generation))
         .route("/ai/sessions/:id/memories", post(routes::trigger_memory_extraction))
         .route("/ai/sessions/:id/skills", post(routes::trigger_skill_extraction))
+        .route("/ai/sessions/:id/markers", post(routes::trigger_marker_detection))
         .route("/ai/cli/status", get(routes::get_ai_cli_status))
         // Server-Sent Events
         .route("/events", get(sse::events_handler))

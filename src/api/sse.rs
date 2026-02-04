@@ -58,6 +58,12 @@ pub enum SseEvent {
     AiSkillComplete { session_id: String, count: usize },
     /// Skill extraction failed
     AiSkillError { session_id: String, error: String },
+    /// Marker detection started
+    AiMarkerStart { session_id: String },
+    /// Marker detection completed
+    AiMarkerComplete { session_id: String, count: usize },
+    /// Marker detection failed
+    AiMarkerError { session_id: String, error: String },
 }
 
 impl From<WatcherEvent> for SseEvent {
@@ -121,6 +127,13 @@ impl From<AiEvent> for SseEvent {
             AiEvent::SkillError { session_id, error } => {
                 SseEvent::AiSkillError { session_id, error }
             }
+            AiEvent::MarkerStart { session_id } => SseEvent::AiMarkerStart { session_id },
+            AiEvent::MarkerComplete { session_id, count } => {
+                SseEvent::AiMarkerComplete { session_id, count }
+            }
+            AiEvent::MarkerError { session_id, error } => {
+                SseEvent::AiMarkerError { session_id, error }
+            }
         }
     }
 }
@@ -143,6 +156,9 @@ fn get_event_type(event: &SseEvent) -> &'static str {
         SseEvent::AiSkillStart { .. } => "ai:skill:start",
         SseEvent::AiSkillComplete { .. } => "ai:skill:complete",
         SseEvent::AiSkillError { .. } => "ai:skill:error",
+        SseEvent::AiMarkerStart { .. } => "ai:markers:start",
+        SseEvent::AiMarkerComplete { .. } => "ai:markers:complete",
+        SseEvent::AiMarkerError { .. } => "ai:markers:error",
     }
 }
 

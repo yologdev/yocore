@@ -58,6 +58,8 @@ impl CliProvider {
                 // Prevent macOS permission dialogs
                 "--strict-mcp-config".to_string(),
                 "--disable-slash-commands".to_string(),
+                // Print mode: don't create session files
+                "--print".to_string(),
             ],
         }
     }
@@ -185,6 +187,42 @@ async fn check_cli_version(path: &PathBuf) -> Option<String> {
     }
 }
 
+/// Synchronously detect available CLI (wraps async detection)
+/// Returns None if no CLI is installed
+pub fn detect_cli() -> Option<DetectedCli> {
+    // Use a runtime handle if available, otherwise create a temporary one
+    let rt = tokio::runtime::Handle::try_current()
+        .map(|h| {
+            std::thread::scope(|s| {
+                s.spawn(|| {
+                    h.block_on(async {
+                        let detected = detect_claude_code().await;
+                        if detected.installed {
+                            Some(detected)
+                        } else {
+                            None
+                        }
+                    })
+                })
+                .join()
+                .unwrap()
+            })
+        })
+        .unwrap_or_else(|_| {
+            let rt = tokio::runtime::Runtime::new().ok()?;
+            rt.block_on(async {
+                let detected = detect_claude_code().await;
+                if detected.installed {
+                    Some(detected)
+                } else {
+                    None
+                }
+            })
+        });
+
+    rt
+}
+
 /// Run CLI with a prompt and return the output
 pub async fn run_cli(
     cli: &DetectedCli,
@@ -202,9 +240,13 @@ pub async fn run_cli(
         &args[..2.min(args.len())]
     );
 
+    // Run in temp directory to avoid creating session files in watched folders
+    let temp_dir = std::env::temp_dir();
+
     let result = timeout(timeout_duration, async {
         Command::new(path)
             .args(&args)
+            .current_dir(&temp_dir)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -229,6 +271,109 @@ pub async fn run_cli(
             timeout_duration.as_secs()
         )),
     }
+}
+
+/// Call CLI with a prompt and return the raw response
+/// Used for marker detection which needs JSON output format
+pub async fn call_cli_with_prompt(
+    prompt: &str,
+    cli: &DetectedCli,
+    timeout_secs: u64,
+) -> Result<String, String> {
+    let path = cli.path.as_ref().ok_or("CLI path not available")?;
+    let timeout_duration = Duration::from_secs(timeout_secs);
+
+    // Build args for JSON output (marker detection needs structured data)
+    let args = vec![
+        "-p".to_string(),
+        prompt.to_string(),
+        "--output-format".to_string(),
+        "json".to_string(),
+        "--model".to_string(),
+        "sonnet".to_string(),
+        "--strict-mcp-config".to_string(),
+        "--mcp-config".to_string(),
+        r#"{"mcpServers":{}}"#.to_string(),
+        "--disable-slash-commands".to_string(),
+        // Print mode: don't create session files
+        "--print".to_string(),
+    ];
+
+    // Run in temp directory to avoid creating session files in watched folders
+    let temp_dir = std::env::temp_dir();
+
+    let result = timeout(timeout_duration, async {
+        Command::new(path)
+            .args(&args)
+            .current_dir(&temp_dir)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .await
+    })
+    .await;
+
+    match result {
+        Ok(Ok(output)) => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let response = stdout.trim();
+
+            if !output.status.success() {
+                return Err(format!("CLI failed: {}", response));
+            }
+
+            if response.is_empty() {
+                return Err("CLI returned empty response".to_string());
+            }
+
+            // Unwrap Claude CLI JSON wrapper if present
+            if let Ok(wrapper) = serde_json::from_str::<serde_json::Value>(response) {
+                if wrapper.get("type").and_then(|v| v.as_str()) == Some("result") {
+                    if let Some(content) = wrapper.get("result").and_then(|v| v.as_str()) {
+                        return Ok(content.to_string());
+                    }
+                }
+            }
+
+            Ok(response.to_string())
+        }
+        Ok(Err(e)) => Err(format!("Failed to execute CLI: {}", e)),
+        Err(_) => Err(format!("CLI timed out after {} seconds", timeout_secs)),
+    }
+}
+
+/// Parse JSON response from CLI (handles markdown code blocks)
+pub fn parse_json_response<T: serde::de::DeserializeOwned>(response: &str) -> Result<T, String> {
+    // Try direct parse first
+    if let Ok(result) = serde_json::from_str(response) {
+        return Ok(result);
+    }
+
+    // Extract from markdown code block
+    let json_str = if response.contains("```") {
+        let lines: Vec<&str> = response.lines().collect();
+        let mut in_block = false;
+        let mut json_lines = Vec::new();
+
+        for line in lines {
+            if line.starts_with("```json") || (line.starts_with("```") && !in_block) {
+                in_block = true;
+                continue;
+            }
+            if line.starts_with("```") && in_block {
+                break;
+            }
+            if in_block {
+                json_lines.push(line);
+            }
+        }
+        json_lines.join("\n")
+    } else {
+        response.to_string()
+    };
+
+    serde_json::from_str(&json_str).map_err(|e| format!("Failed to parse JSON: {}", e))
 }
 
 #[cfg(test)]

@@ -44,6 +44,18 @@ pub enum AiEvent {
         session_id: String,
         error: String,
     },
+    /// Marker detection started
+    MarkerStart { session_id: String },
+    /// Marker detection completed
+    MarkerComplete {
+        session_id: String,
+        count: usize,
+    },
+    /// Marker detection failed
+    MarkerError {
+        session_id: String,
+        error: String,
+    },
 }
 
 impl AiEvent {
@@ -59,6 +71,9 @@ impl AiEvent {
             AiEvent::SkillStart { .. } => "ai:skill:start",
             AiEvent::SkillComplete { .. } => "ai:skill:complete",
             AiEvent::SkillError { .. } => "ai:skill:error",
+            AiEvent::MarkerStart { .. } => "ai:markers:start",
+            AiEvent::MarkerComplete { .. } => "ai:markers:complete",
+            AiEvent::MarkerError { .. } => "ai:markers:error",
         }
     }
 }

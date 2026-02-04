@@ -316,11 +316,16 @@ pub async fn list_sessions(
     let limit = query.limit.unwrap_or(50);
     let offset = query.offset.unwrap_or(0);
     let include_hidden = query.include_hidden.unwrap_or(false);
-    let project_id = query.project_id.clone();
+    let project_id_input = query.project_id.clone();
 
     let result = state
         .db
         .with_conn(move |conn| {
+            // Resolve folder-path-based ID to actual UUID if provided
+            let project_id = project_id_input
+                .as_ref()
+                .and_then(|pid| resolve_project_id(conn, pid));
+
             let (sql, params): (String, Vec<Box<dyn rusqlite::ToSql>>) =
                 if let Some(ref pid) = project_id {
                     let hidden_filter = if include_hidden { "" } else { " AND is_hidden = 0" };
@@ -893,6 +898,48 @@ pub struct ListMemoriesQuery {
     pub state: Option<String>,
     pub limit: Option<i64>,
     pub offset: Option<i64>,
+    /// Sort by field: "confidence" (default), "extracted_at"
+    pub sort_by: Option<String>,
+    /// Sort order: "asc" or "desc" (default)
+    pub sort_order: Option<String>,
+}
+
+/// Resolve a project identifier to a UUID.
+/// If the input looks like a folder-path-based ID (starts with '-' or is not a valid UUID),
+/// look it up by folder_path. Otherwise, use it directly as a UUID.
+fn resolve_project_id(conn: &rusqlite::Connection, project_id: &str) -> Option<String> {
+    // Check if it looks like a UUID (36 chars with hyphens in right places)
+    let is_uuid = project_id.len() == 36
+        && project_id.chars().nth(8) == Some('-')
+        && project_id.chars().nth(13) == Some('-');
+
+    if is_uuid {
+        // Verify it exists
+        let exists: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM projects WHERE id = ?)",
+                [project_id],
+                |row| row.get(0),
+            )
+            .unwrap_or(false);
+        if exists {
+            return Some(project_id.to_string());
+        }
+    }
+
+    // Try to find by folder_path (ending with this segment)
+    let folder_suffix = if project_id.starts_with('-') {
+        format!("/{}", project_id)
+    } else {
+        format!("/{}", project_id)
+    };
+
+    conn.query_row(
+        "SELECT id FROM projects WHERE folder_path LIKE ?",
+        [format!("%{}", folder_suffix)],
+        |row| row.get(0),
+    )
+    .ok()
 }
 
 pub async fn list_memories(
@@ -908,9 +955,12 @@ pub async fn list_memories(
             let mut conditions = vec!["1=1"];
             let mut params: Vec<Box<dyn rusqlite::ToSql>> = vec![];
 
-            if let Some(project_id) = query.project_id {
+            if let Some(project_id_input) = query.project_id {
+                // Resolve folder-path-based ID to actual UUID
+                let resolved_id = resolve_project_id(conn, &project_id_input)
+                    .unwrap_or(project_id_input);
                 conditions.push("project_id = ?");
-                params.push(Box::new(project_id));
+                params.push(Box::new(resolved_id));
             }
             if let Some(memory_type) = query.memory_type {
                 conditions.push("memory_type = ?");
@@ -924,14 +974,28 @@ pub async fn list_memories(
             params.push(Box::new(limit));
             params.push(Box::new(offset));
 
+            // Build ORDER BY clause - whitelist allowed columns to prevent SQL injection
+            let sort_column = match query.sort_by.as_deref() {
+                Some("extracted_at") => "extracted_at",
+                Some("confidence") | None => "confidence",
+                _ => "confidence", // Default for unknown values
+            };
+            let sort_direction = match query.sort_order.as_deref() {
+                Some("asc") => "ASC",
+                Some("desc") | None => "DESC",
+                _ => "DESC", // Default for unknown values
+            };
+
             let sql = format!(
                 "SELECT id, project_id, session_id, memory_type, title, content,
                         context, tags, confidence, is_validated, state, extracted_at
                  FROM memories
                  WHERE {} AND state != 'removed'
-                 ORDER BY confidence DESC
+                 ORDER BY {} {}
                  LIMIT ? OFFSET ?",
-                conditions.join(" AND ")
+                conditions.join(" AND "),
+                sort_column,
+                sort_direction
             );
 
             let params_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
@@ -985,11 +1049,16 @@ pub async fn search_memories(
 ) -> impl IntoResponse {
     let limit = req.limit.unwrap_or(20);
     let query_str = req.query.clone();
-    let project_id = req.project_id.clone();
+    let project_id_input = req.project_id.clone();
 
     let result = state
         .db
         .with_conn(move |conn| {
+            // Resolve folder-path-based ID to actual UUID if provided
+            let project_id = project_id_input
+                .as_ref()
+                .and_then(|pid| resolve_project_id(conn, pid));
+
             let sql = if project_id.is_some() {
                 format!(
                     "SELECT m.id, m.project_id, m.session_id, m.memory_type, m.title,
@@ -1539,6 +1608,143 @@ pub async fn trigger_skill_extraction(
             "status": "started",
             "session_id": session_id,
             "message": "Skill extraction started. Listen to SSE for progress."
+        })),
+    )
+        .into_response()
+}
+
+// ============================================================================
+// Markers
+// ============================================================================
+
+/// Get markers for a session
+pub async fn get_session_markers(
+    State(state): State<AppState>,
+    Path(session_id): Path<String>,
+) -> impl IntoResponse {
+    let result = state
+        .db
+        .with_conn(move |conn| crate::ai::marker::get_markers(conn, &session_id))
+        .await;
+
+    match result {
+        Ok(markers) => Json(serde_json::json!({ "markers": markers })).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+/// Delete a marker by ID
+pub async fn delete_marker(
+    State(state): State<AppState>,
+    Path(marker_id): Path<i64>,
+) -> impl IntoResponse {
+    let result = state
+        .db
+        .with_conn(move |conn| crate::ai::marker::delete_marker_by_id(conn, marker_id))
+        .await;
+
+    match result {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) if e.contains("not found") => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "Marker not found" })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+/// Trigger marker detection for a session (async, returns immediately)
+pub async fn trigger_marker_detection(
+    State(state): State<AppState>,
+    Path(session_id): Path<String>,
+) -> impl IntoResponse {
+    // Verify session exists
+    let session_id_clone = session_id.clone();
+    let session_exists = state
+        .db
+        .with_conn(move |conn| {
+            conn.query_row(
+                "SELECT 1 FROM sessions WHERE id = ?",
+                [&session_id_clone],
+                |_| Ok(true),
+            )
+        })
+        .await;
+
+    match session_exists {
+        Err(rusqlite::Error::QueryReturnedNoRows) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": "Session not found" })),
+            )
+                .into_response()
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response()
+        }
+        Ok(_) => {}
+    }
+
+    // Acquire task queue permit
+    let permit = match state.ai_task_queue.acquire().await {
+        Ok(p) => p,
+        Err(e) => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({ "error": e })),
+            )
+                .into_response()
+        }
+    };
+
+    // Clone values for the spawned task
+    let db = state.db.clone();
+    let ai_event_tx = state.ai_event_tx.clone();
+    let session_id_for_task = session_id.clone();
+
+    // Spawn background task for marker detection
+    tokio::spawn(async move {
+        // Keep permit alive during task execution
+        let _permit = permit;
+
+        // Emit start event
+        let _ = ai_event_tx.send(AiEvent::MarkerStart {
+            session_id: session_id_for_task.clone(),
+        });
+
+        // Detect CLI
+        let cli = crate::ai::cli::detect_cli();
+
+        // Run marker detection
+        let result = crate::ai::detect_markers(&db, &session_id_for_task, cli).await;
+
+        // Emit completion event
+        let _ = ai_event_tx.send(AiEvent::MarkerComplete {
+            session_id: session_id_for_task,
+            count: result.markers_detected,
+        });
+    });
+
+    // Return immediately with 202 Accepted
+    (
+        StatusCode::ACCEPTED,
+        Json(serde_json::json!({
+            "status": "started",
+            "session_id": session_id,
+            "message": "Marker detection started. Listen to SSE for progress."
         })),
     )
         .into_response()
