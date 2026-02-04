@@ -473,8 +473,16 @@ async fn store_session(
         .with_conn(move |conn| {
             use rusqlite::params;
 
-            // Get or create project from parent directory
-            let project_id = get_or_create_project_sync(conn, &path)?;
+            // Get existing project for this folder (don't auto-create)
+            // If no project exists, skip storing this session
+            let project_id = match get_project_for_path_sync(conn, &path) {
+                Some(id) => id,
+                None => {
+                    // No project exists for this folder - skip silently
+                    // Users must explicitly add projects they want to track
+                    return Ok(None);
+                }
+            };
 
             // Insert or update session
             conn.execute(
@@ -550,9 +558,15 @@ async fn store_session(
                 .map_err(|e| format!("Failed to insert message {}: {}", event.sequence, e))?;
             }
 
-            Ok::<String, String>(project_id)
+            Ok::<Option<String>, String>(Some(project_id))
         })
         .await?;
+
+    // If no project was found, the session was skipped
+    let project_id = match project_id {
+        Some(id) => id,
+        None => return Ok(()),
+    };
 
     tracing::info!(
         "Stored session {} with {} messages in project {}",
@@ -564,63 +578,25 @@ async fn store_session(
     Ok(())
 }
 
-/// Get or create a project for the given session file path (synchronous version)
-fn get_or_create_project_sync(
+/// Get an existing project for the given session file path (does NOT auto-create)
+/// Returns None if no project exists for this folder - session will be skipped
+fn get_project_for_path_sync(
     conn: &rusqlite::Connection,
     session_path: &PathBuf,
-) -> std::result::Result<String, String> {
+) -> Option<String> {
     use rusqlite::params;
 
     // Get parent directory as project folder
     let folder_path = session_path
-        .parent()
-        .ok_or("Session file has no parent directory")?
+        .parent()?
         .to_string_lossy()
         .to_string();
 
-    // Derive project name from folder name (e.g., "-Users-yuanhao-vibedev-yolog" -> "yolog")
-    let folder_name = session_path
-        .parent()
-        .and_then(|p| p.file_name())
-        .and_then(|n| n.to_str())
-        .unwrap_or("Unknown");
-
-    // Extract meaningful name from path-based folder name
-    let project_name = if folder_name.starts_with('-') {
-        // Claude Code style: "-Users-yuanhao-vibedev-yolog" -> last segment
-        folder_name
-            .split('-')
-            .filter(|s| !s.is_empty())
-            .last()
-            .unwrap_or(folder_name)
-    } else {
-        folder_name
-    };
-
-    // Check if project already exists
-    let existing_id: Option<String> = conn
-        .query_row(
-            "SELECT id FROM projects WHERE folder_path = ?",
-            params![folder_path],
-            |row| row.get(0),
-        )
-        .ok();
-
-    if let Some(id) = existing_id {
-        return Ok(id);
-    }
-
-    // Create new project
-    let project_id = uuid::Uuid::new_v4().to_string();
-    let now = chrono::Utc::now().to_rfc3339();
-
-    conn.execute(
-        "INSERT INTO projects (id, name, folder_path, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![project_id, project_name, folder_path, now, now],
-    ).map_err(|e| format!("Failed to create project: {}", e))?;
-
-    tracing::info!("Created project '{}' for {}", project_name, folder_path);
-
-    Ok(project_id)
+    // Check if project already exists for this folder
+    conn.query_row(
+        "SELECT id FROM projects WHERE folder_path = ?",
+        params![folder_path],
+        |row| row.get(0),
+    )
+    .ok()
 }
