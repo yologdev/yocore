@@ -114,6 +114,10 @@ fn create_router(state: AppState) -> Router {
         .route("/ai/sessions/:id/skills", post(routes::trigger_skill_extraction))
         .route("/ai/sessions/:id/markers", post(routes::trigger_marker_detection))
         .route("/ai/cli/status", get(routes::get_ai_cli_status))
+        // AI Settings
+        .route("/ai/settings", get(routes::get_ai_settings))
+        .route("/ai/settings", patch(routes::update_ai_settings))
+        .route("/ai/privacy/accept", post(routes::accept_ai_privacy))
         // Memory Ranking
         .route(
             "/projects/:id/rank-memories",

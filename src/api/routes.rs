@@ -1446,6 +1446,100 @@ pub async fn get_ai_cli_status() -> impl IntoResponse {
     }))
 }
 
+/// Get AI settings
+pub async fn get_ai_settings(State(state): State<AppState>) -> impl IntoResponse {
+    let result = state
+        .db
+        .with_conn(|conn| {
+            conn.query_row(
+                "SELECT enabled, selected_provider, privacy_accepted FROM ai_settings WHERE id = 1",
+                [],
+                |row| {
+                    Ok(serde_json::json!({
+                        "enabled": row.get::<_, bool>(0)?,
+                        "selected_provider": row.get::<_, Option<String>>(1)?,
+                        "privacy_accepted": row.get::<_, bool>(2)?,
+                    }))
+                },
+            )
+        })
+        .await;
+
+    match result {
+        Ok(settings) => Json(settings).into_response(),
+        Err(_) => {
+            // Return defaults if not found
+            Json(serde_json::json!({
+                "enabled": true,
+                "selected_provider": "claude_code",
+                "privacy_accepted": false,
+            }))
+            .into_response()
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateAiSettingsRequest {
+    pub enabled: Option<bool>,
+    pub selected_provider: Option<String>,
+    pub privacy_accepted: Option<bool>,
+}
+
+/// Update AI settings
+pub async fn update_ai_settings(
+    State(state): State<AppState>,
+    Json(req): Json<UpdateAiSettingsRequest>,
+) -> impl IntoResponse {
+    let result = state
+        .db
+        .with_conn(move |conn| {
+            let now = chrono::Utc::now().to_rfc3339();
+            conn.execute(
+                "UPDATE ai_settings SET
+                    enabled = COALESCE(?, enabled),
+                    selected_provider = COALESCE(?, selected_provider),
+                    privacy_accepted = COALESCE(?, privacy_accepted),
+                    updated_at = ?
+                 WHERE id = 1",
+                rusqlite::params![req.enabled, req.selected_provider, req.privacy_accepted, now],
+            )
+        })
+        .await;
+
+    match result {
+        Ok(_) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+/// Accept AI privacy warning
+pub async fn accept_ai_privacy(State(state): State<AppState>) -> impl IntoResponse {
+    let result = state
+        .db
+        .with_conn(|conn| {
+            let now = chrono::Utc::now().to_rfc3339();
+            conn.execute(
+                "UPDATE ai_settings SET privacy_accepted = 1, updated_at = ? WHERE id = 1",
+                [&now],
+            )
+        })
+        .await;
+
+    match result {
+        Ok(_) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct TitleGenerationRequest {
     #[serde(default)]
