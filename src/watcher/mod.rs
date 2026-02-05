@@ -526,6 +526,7 @@ async fn store_session(
                     created_at, indexed_at
                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
                 ON CONFLICT(id) DO UPDATE SET
+                    ai_tool = ?5,
                     message_count = ?6,
                     duration_ms = ?7,
                     has_code = ?8,
