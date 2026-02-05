@@ -434,30 +434,37 @@ async fn parse_session_file(
     tracing::info!("Parsed session {}: {} messages", session_id, message_count);
 
     // Store session in database
-    if let Err(e) = store_session(db, file_path, session_id, parser_type, &result).await {
-        tracing::error!("Failed to store session {}: {}", session_id, e);
-        let _ = event_tx.send(WatcherEvent::Error {
-            file_path: file_path.to_string(),
-            error: format!("Failed to store session: {}", e),
-        });
-        return;
+    match store_session(db, file_path, session_id, parser_type, &result).await {
+        Ok(true) => {
+            // Session was stored - emit success event
+            let _ = event_tx.send(WatcherEvent::SessionParsed {
+                session_id: session_id.to_string(),
+                message_count,
+            });
+        }
+        Ok(false) => {
+            // Session was skipped (no matching project) - don't emit event
+            tracing::debug!("Skipped session {} - no matching project", session_id);
+        }
+        Err(e) => {
+            tracing::error!("Failed to store session {}: {}", session_id, e);
+            let _ = event_tx.send(WatcherEvent::Error {
+                file_path: file_path.to_string(),
+                error: format!("Failed to store session: {}", e),
+            });
+        }
     }
-
-    // Emit success event
-    let _ = event_tx.send(WatcherEvent::SessionParsed {
-        session_id: session_id.to_string(),
-        message_count,
-    });
 }
 
 /// Store a parsed session in the database
+/// Returns Ok(true) if stored, Ok(false) if skipped (no matching project), Err on failure
 async fn store_session(
     db: &Arc<Database>,
     file_path: &str,
     session_id: &str,
     parser_type: &str,
     result: &crate::parser::ParseResult,
-) -> std::result::Result<(), String> {
+) -> std::result::Result<bool, String> {
     let now = chrono::Utc::now().to_rfc3339();
     let path = PathBuf::from(file_path);
 
@@ -592,7 +599,7 @@ async fn store_session(
     // If no project was found, the session was skipped
     let project_id = match project_id {
         Some(id) => id,
-        None => return Ok(()),
+        None => return Ok(false), // Session skipped - no matching project
     };
 
     tracing::info!(
@@ -602,7 +609,7 @@ async fn store_session(
         project_id
     );
 
-    Ok(())
+    Ok(true) // Session was stored
 }
 
 /// Get an existing project for the given session file path (does NOT auto-create)

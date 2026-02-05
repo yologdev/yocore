@@ -859,7 +859,9 @@ pub async fn get_session_messages(
     Path(session_id): Path<String>,
     Query(query): Query<GetMessagesQuery>,
 ) -> impl IntoResponse {
-    let limit = query.limit.unwrap_or(100);
+    // Default to no limit (return all messages) when not specified
+    // Desktop expects all messages for timeline rendering
+    let limit = query.limit.unwrap_or(i64::MAX);
     let offset = query.offset.unwrap_or(0);
 
     let result = state
