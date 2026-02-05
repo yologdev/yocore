@@ -83,7 +83,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Create core instance
-    let core = Core::new(config)?;
+    let core = Core::new(config, config_path)?;
 
     if args.mcp {
         // MCP server mode - communicate over stdio

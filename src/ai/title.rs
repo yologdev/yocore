@@ -176,7 +176,7 @@ pub async fn store_title(
 
     db.with_conn(move |conn| {
         conn.execute(
-            "UPDATE sessions SET title = ?, indexed_at = ? WHERE id = ?",
+            "UPDATE sessions SET title = ?, title_ai_generated = 1, indexed_at = ? WHERE id = ?",
             rusqlite::params![title, now, session_id],
         )
         .map_err(|e| e.to_string())?;

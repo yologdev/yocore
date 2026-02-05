@@ -45,6 +45,7 @@ pub fn init_db(conn: &Connection) -> Result<()> {
             archived_file_path TEXT,
             archived_at TEXT,
             title_edited BOOLEAN NOT NULL DEFAULT 0,
+            title_ai_generated BOOLEAN NOT NULL DEFAULT 0,
             memories_extracted_at TEXT,
             memories_extracted_count INTEGER DEFAULT 0,
             skills_extracted_at TEXT,
@@ -217,31 +218,32 @@ pub fn init_db(conn: &Connection) -> Result<()> {
         [],
     )?;
 
-    // AI settings table
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS ai_settings (
-            id INTEGER PRIMARY KEY CHECK (id = 1),
-            enabled BOOLEAN NOT NULL DEFAULT 0,
-            selected_provider TEXT,
-            privacy_accepted BOOLEAN NOT NULL DEFAULT 0,
-            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-        )",
-        [],
-    )?;
-
-    // Initialize AI settings if not exists
-    conn.execute(
-        "INSERT OR IGNORE INTO ai_settings (id, enabled, privacy_accepted, created_at, updated_at)
-         VALUES (1, 0, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
-        [],
-    )?;
+    // Migrations for existing databases
+    run_migrations(conn)?;
 
     // Create indexes
     create_indexes(conn)?;
 
     // Initialize FTS5 tables
     init_fts_tables(conn)?;
+
+    Ok(())
+}
+
+/// Run schema migrations for existing databases
+fn run_migrations(conn: &Connection) -> Result<()> {
+    // Add title_ai_generated column if missing (existing DBs won't have it)
+    let has_column: bool = conn
+        .prepare("SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name = 'title_ai_generated'")?
+        .query_row([], |row| row.get::<_, i64>(0))
+        .map(|count| count > 0)?;
+
+    if !has_column {
+        conn.execute(
+            "ALTER TABLE sessions ADD COLUMN title_ai_generated BOOLEAN NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
 
     Ok(())
 }

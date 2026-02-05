@@ -78,27 +78,6 @@ impl AiEvent {
     }
 }
 
-/// AI settings stored in database
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AiSettings {
-    /// Whether AI features are enabled
-    pub enabled: bool,
-    /// Selected provider (e.g., "claude_code")
-    pub selected_provider: Option<String>,
-    /// Whether user has accepted privacy warning
-    pub privacy_accepted: bool,
-}
-
-impl Default for AiSettings {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            selected_provider: Some("claude_code".to_string()),
-            privacy_accepted: false,
-        }
-    }
-}
-
 /// Result of title generation
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TitleGenerationResult {

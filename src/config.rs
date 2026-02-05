@@ -261,6 +261,60 @@ impl Config {
             .collect()
     }
 
+    /// Save configuration to a TOML file
+    pub fn save_to_file<P: AsRef<Path>>(&self, path: P) -> Result<()> {
+        let content = toml::to_string_pretty(self)
+            .map_err(|e| CoreError::Config(format!("Failed to serialize config: {}", e)))?;
+        std::fs::write(path.as_ref(), content)?;
+        Ok(())
+    }
+
+    /// Check if config is read-only (via YOLOG_CONFIG_READONLY env var)
+    pub fn is_readonly() -> bool {
+        std::env::var("YOLOG_CONFIG_READONLY")
+            .map(|v| v == "true" || v == "1")
+            .unwrap_or(false)
+    }
+
+    /// Get list of active environment overrides
+    pub fn active_env_overrides() -> Vec<String> {
+        let mut overrides = Vec::new();
+        if std::env::var("YOLOG_SERVER_HOST").is_ok() {
+            overrides.push("YOLOG_SERVER_HOST".to_string());
+        }
+        if std::env::var("YOLOG_SERVER_PORT").is_ok() {
+            overrides.push("YOLOG_SERVER_PORT".to_string());
+        }
+        if std::env::var("YOLOG_SERVER_API_KEY").is_ok() {
+            overrides.push("YOLOG_SERVER_API_KEY".to_string());
+        }
+        if std::env::var("YOLOG_DATA_DIR").is_ok() {
+            overrides.push("YOLOG_DATA_DIR".to_string());
+        }
+        if std::env::var("YOLOG_CONFIG_READONLY").is_ok() {
+            overrides.push("YOLOG_CONFIG_READONLY".to_string());
+        }
+        overrides
+    }
+
+    /// Apply environment variable overrides (server options only)
+    pub fn apply_env_overrides(&mut self) {
+        if let Ok(host) = std::env::var("YOLOG_SERVER_HOST") {
+            self.server.host = host;
+        }
+        if let Ok(port) = std::env::var("YOLOG_SERVER_PORT") {
+            if let Ok(port) = port.parse() {
+                self.server.port = port;
+            }
+        }
+        if let Ok(key) = std::env::var("YOLOG_SERVER_API_KEY") {
+            self.server.api_key = if key.is_empty() { None } else { Some(key) };
+        }
+        if let Ok(data_dir) = std::env::var("YOLOG_DATA_DIR") {
+            self.data_dir = PathBuf::from(data_dir);
+        }
+    }
+
     /// Create a default configuration file at the given path
     pub fn create_default<P: AsRef<Path>>(path: P) -> Result<()> {
         // Write a well-commented config file

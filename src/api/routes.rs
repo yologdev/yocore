@@ -2115,6 +2115,31 @@ pub async fn get_memory_tags(
 use crate::ai::cli::detect_claude_code;
 use crate::ai::title::{generate_title, store_title};
 use crate::ai::types::AiEvent;
+use crate::config::Config;
+
+/// Check if a specific AI feature is enabled in config.toml
+fn check_ai_feature(state: &AppState, feature: &str) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    let config = Config::from_file(&state.config_path).map_err(|e| {
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() })))
+    })?;
+
+    if !config.ai.enabled {
+        return Err((StatusCode::FORBIDDEN, Json(serde_json::json!({ "error": "AI features are disabled" }))));
+    }
+
+    let feature_enabled = match feature {
+        "title_generation" => config.ai.features.title_generation,
+        "memory_extraction" => config.ai.features.memory_extraction,
+        "skills_discovery" => config.ai.features.skills_discovery,
+        _ => false,
+    };
+
+    if !feature_enabled {
+        return Err((StatusCode::FORBIDDEN, Json(serde_json::json!({ "error": format!("AI feature '{}' is disabled", feature) }))));
+    }
+
+    Ok(())
+}
 
 /// Get AI CLI detection status
 pub async fn get_ai_cli_status() -> impl IntoResponse {
@@ -2149,7 +2174,7 @@ pub async fn get_pending_ai_sessions(State(state): State<AppState>) -> impl Into
                     s.id as session_id,
                     s.project_id,
                     s.message_count,
-                    (s.title IS NULL AND COALESCE(s.title_edited, 0) = 0) as needs_title,
+                    (COALESCE(s.title_ai_generated, 0) = 0 AND COALESCE(s.title_edited, 0) = 0) as needs_title,
                     (s.memories_extracted_at IS NULL) as needs_memory,
                     (s.skills_extracted_at IS NULL) as needs_skills
                 FROM sessions s
@@ -2158,7 +2183,7 @@ pub async fn get_pending_ai_sessions(State(state): State<AppState>) -> impl Into
                   AND COALESCE(s.import_status, 'success') = 'success'
                   AND s.message_count >= 25
                   AND (
-                    (s.title IS NULL AND COALESCE(s.title_edited, 0) = 0)
+                    (COALESCE(s.title_ai_generated, 0) = 0 AND COALESCE(s.title_edited, 0) = 0)
                     OR s.memories_extracted_at IS NULL
                     OR s.skills_extracted_at IS NULL
                   )
@@ -2186,100 +2211,6 @@ pub async fn get_pending_ai_sessions(State(state): State<AppState>) -> impl Into
 
     match result {
         Ok(sessions) => Json(serde_json::json!({ "sessions": sessions })).into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response(),
-    }
-}
-
-/// Get AI settings
-pub async fn get_ai_settings(State(state): State<AppState>) -> impl IntoResponse {
-    let result = state
-        .db
-        .with_conn(|conn| {
-            conn.query_row(
-                "SELECT enabled, selected_provider, privacy_accepted FROM ai_settings WHERE id = 1",
-                [],
-                |row| {
-                    Ok(serde_json::json!({
-                        "enabled": row.get::<_, bool>(0)?,
-                        "selected_provider": row.get::<_, Option<String>>(1)?,
-                        "privacy_accepted": row.get::<_, bool>(2)?,
-                    }))
-                },
-            )
-        })
-        .await;
-
-    match result {
-        Ok(settings) => Json(settings).into_response(),
-        Err(_) => {
-            // Return defaults if not found
-            Json(serde_json::json!({
-                "enabled": true,
-                "selected_provider": "claude_code",
-                "privacy_accepted": false,
-            }))
-            .into_response()
-        }
-    }
-}
-
-#[derive(Debug, Deserialize)]
-pub struct UpdateAiSettingsRequest {
-    pub enabled: Option<bool>,
-    pub selected_provider: Option<String>,
-    pub privacy_accepted: Option<bool>,
-}
-
-/// Update AI settings
-pub async fn update_ai_settings(
-    State(state): State<AppState>,
-    Json(req): Json<UpdateAiSettingsRequest>,
-) -> impl IntoResponse {
-    let result = state
-        .db
-        .with_conn(move |conn| {
-            let now = chrono::Utc::now().to_rfc3339();
-            conn.execute(
-                "UPDATE ai_settings SET
-                    enabled = COALESCE(?, enabled),
-                    selected_provider = COALESCE(?, selected_provider),
-                    privacy_accepted = COALESCE(?, privacy_accepted),
-                    updated_at = ?
-                 WHERE id = 1",
-                rusqlite::params![req.enabled, req.selected_provider, req.privacy_accepted, now],
-            )
-        })
-        .await;
-
-    match result {
-        Ok(_) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response(),
-    }
-}
-
-/// Accept AI privacy warning
-pub async fn accept_ai_privacy(State(state): State<AppState>) -> impl IntoResponse {
-    let result = state
-        .db
-        .with_conn(|conn| {
-            let now = chrono::Utc::now().to_rfc3339();
-            conn.execute(
-                "UPDATE ai_settings SET privacy_accepted = 1, updated_at = ? WHERE id = 1",
-                [&now],
-            )
-        })
-        .await;
-
-    match result {
-        Ok(_) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": e.to_string() })),
@@ -2424,32 +2355,43 @@ pub async fn trigger_title_generation(
     Path(session_id): Path<String>,
     body: Option<Json<TitleGenerationRequest>>,
 ) -> impl IntoResponse {
+    if let Err(resp) = check_ai_feature(&state, "title_generation") {
+        return resp.into_response();
+    }
+
     let force = body.map(|b| b.force).unwrap_or(false);
 
-    // Check if session exists and has title (unless force)
+    // Check if session already has AI-generated or user-edited title (unless force)
     if !force {
         let session_id_clone = session_id.clone();
-        let has_title = state
+        let skip_reason = state
             .db
             .with_conn(move |conn| {
                 conn.query_row(
-                    "SELECT title FROM sessions WHERE id = ?",
+                    "SELECT COALESCE(title_ai_generated, 0), COALESCE(title_edited, 0) FROM sessions WHERE id = ?",
                     [&session_id_clone],
                     |row| {
-                        let title: Option<String> = row.get(0)?;
-                        Ok(title.is_some() && title.unwrap().len() > 0)
+                        let ai_generated: bool = row.get(0)?;
+                        let user_edited: bool = row.get(1)?;
+                        Ok(if ai_generated {
+                            Some("Session already has an AI-generated title")
+                        } else if user_edited {
+                            Some("Session has a user-edited title")
+                        } else {
+                            None
+                        })
                     },
                 )
             })
             .await;
 
-        match has_title {
-            Ok(true) => {
+        match skip_reason {
+            Ok(Some(reason)) => {
                 return (
                     StatusCode::OK,
                     Json(serde_json::json!({
                         "status": "skipped",
-                        "message": "Session already has a title"
+                        "message": reason
                     })),
                 )
                     .into_response()
@@ -2468,7 +2410,7 @@ pub async fn trigger_title_generation(
                 )
                     .into_response()
             }
-            Ok(false) => {} // Continue with generation
+            Ok(None) => {} // Continue with generation
         }
     }
 
@@ -2548,6 +2490,10 @@ pub async fn trigger_memory_extraction(
     Path(session_id): Path<String>,
     body: Option<Json<MemoryExtractionRequest>>,
 ) -> impl IntoResponse {
+    if let Err(resp) = check_ai_feature(&state, "memory_extraction") {
+        return resp.into_response();
+    }
+
     let force = body.map(|b| b.force).unwrap_or(false);
 
     // Verify session exists
@@ -2649,6 +2595,10 @@ pub async fn trigger_skill_extraction(
     Path(session_id): Path<String>,
     body: Option<Json<SkillExtractionRequest>>,
 ) -> impl IntoResponse {
+    if let Err(resp) = check_ai_feature(&state, "skills_discovery") {
+        return resp.into_response();
+    }
+
     let force = body.map(|b| b.force).unwrap_or(false);
 
     // Verify session exists
@@ -2792,6 +2742,10 @@ pub async fn trigger_marker_detection(
     State(state): State<AppState>,
     Path(session_id): Path<String>,
 ) -> impl IntoResponse {
+    if let Err(resp) = check_ai_feature(&state, "skills_discovery") {
+        return resp.into_response();
+    }
+
     // Verify session exists
     let session_id_clone = session_id.clone();
     let session_exists = state

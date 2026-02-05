@@ -12,9 +12,11 @@
 //! As a library (embedded in Desktop):
 //! ```ignore
 //! use yocore::{Config, Core};
+//! use std::path::PathBuf;
 //!
-//! let config = Config::from_file("~/.yolog/config.toml").unwrap();
-//! let core = Core::new(config).unwrap();
+//! let config_path = PathBuf::from("~/.yolog/config.toml");
+//! let config = Config::from_file(&config_path).unwrap();
+//! let core = Core::new(config, config_path).unwrap();
 //! // core.start_watching().await.unwrap();
 //! ```
 //!
@@ -41,6 +43,7 @@ pub use error::{CoreError, Result};
 
 use ai::queue::AiTaskQueue;
 use ai::types::AiEvent;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
 
@@ -48,6 +51,9 @@ use tokio::sync::{broadcast, RwLock};
 pub struct Core {
     /// Configuration
     pub config: Config,
+
+    /// Path to config file (for config API)
+    pub config_path: PathBuf,
 
     /// Database connection
     pub db: Arc<Database>,
@@ -67,7 +73,7 @@ pub struct Core {
 
 impl Core {
     /// Create a new Core instance with the given configuration
-    pub fn new(config: Config) -> Result<Self> {
+    pub fn new(config: Config, config_path: PathBuf) -> Result<Self> {
         let db_path = config.data_dir().join("yolog.db");
         let db = Database::new(db_path)?;
         let (event_tx, _) = broadcast::channel(256);
@@ -76,6 +82,7 @@ impl Core {
 
         Ok(Core {
             config,
+            config_path,
             db: Arc::new(db),
             watcher_handle: RwLock::new(None),
             event_tx,
@@ -85,12 +92,13 @@ impl Core {
     }
 
     /// Create a Core instance with an existing database (for Desktop embedding)
-    pub fn with_database(config: Config, db: Arc<Database>) -> Self {
+    pub fn with_database(config: Config, config_path: PathBuf, db: Arc<Database>) -> Self {
         let (event_tx, _) = broadcast::channel(256);
         let (ai_event_tx, _) = broadcast::channel(256);
         let ai_task_queue = AiTaskQueue::new(3);
         Core {
             config,
+            config_path,
             db,
             watcher_handle: RwLock::new(None),
             event_tx,
@@ -127,6 +135,7 @@ impl Core {
             addr,
             self.db.clone(),
             &self.config,
+            self.config_path.clone(),
             self.event_tx.clone(),
             self.ai_event_tx.clone(),
             self.ai_task_queue.clone(),

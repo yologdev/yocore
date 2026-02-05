@@ -3,6 +3,7 @@
 //! Provides REST API endpoints for sessions, projects, memories, and search.
 
 mod auth;
+mod config_routes;
 pub mod routes;
 mod sse;
 
@@ -15,7 +16,7 @@ use crate::watcher::WatcherEvent;
 
 use axum::{
     middleware,
-    routing::{delete, get, patch, post},
+    routing::{delete, get, patch, post, put},
     Router,
 };
 use std::net::SocketAddr;
@@ -35,6 +36,8 @@ pub struct AppState {
     pub ai_event_tx: broadcast::Sender<AiEvent>,
     /// AI task queue for concurrency control
     pub ai_task_queue: AiTaskQueue,
+    /// Path to the config file (for config API)
+    pub config_path: std::path::PathBuf,
 }
 
 /// Start the HTTP API server
@@ -42,6 +45,7 @@ pub async fn serve(
     addr: SocketAddr,
     db: Arc<Database>,
     config: &Config,
+    config_path: std::path::PathBuf,
     event_tx: broadcast::Sender<WatcherEvent>,
     ai_event_tx: broadcast::Sender<AiEvent>,
     ai_task_queue: AiTaskQueue,
@@ -52,6 +56,7 @@ pub async fn serve(
         event_tx,
         ai_event_tx,
         ai_task_queue,
+        config_path,
     };
 
     let app = create_router(state);
@@ -121,10 +126,6 @@ fn create_router(state: AppState) -> Router {
         .route("/ai/sessions/:id/markers", post(routes::trigger_marker_detection))
         .route("/ai/cli/status", get(routes::get_ai_cli_status))
         .route("/ai/pending-sessions", get(routes::get_pending_ai_sessions))
-        // AI Settings
-        .route("/ai/settings", get(routes::get_ai_settings))
-        .route("/ai/settings", patch(routes::update_ai_settings))
-        .route("/ai/privacy/accept", post(routes::accept_ai_privacy))
         // AI Export
         .route("/ai/export/capabilities", get(routes::get_ai_export_capabilities))
         .route("/ai/export/generate", post(routes::generate_ai_export))
@@ -145,6 +146,14 @@ fn create_router(state: AppState) -> Router {
         .route("/projects/:id/skills", get(routes::list_project_skills))
         .route("/projects/:id/skills/stats", get(routes::get_skill_stats))
         .route("/skills/:id", delete(routes::delete_skill_by_id))
+        // Config API
+        .route("/config", get(config_routes::get_config))
+        .route("/config", put(config_routes::update_config))
+        .route("/config/ai", get(config_routes::get_ai_config))
+        .route("/config/ai", put(config_routes::update_ai_config))
+        .route("/config/watch", get(config_routes::list_watch_paths))
+        .route("/config/watch", post(config_routes::add_watch_path))
+        .route("/config/watch/:index", delete(config_routes::remove_watch_path))
         // Server-Sent Events
         .route("/events", get(sse::events_handler))
         // Apply auth middleware to all API routes

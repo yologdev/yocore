@@ -25,4 +25,4 @@ pub use memory::extract_memories;
 pub use queue::AiTaskQueue;
 pub use ranking::{rank_project_memories, RankingConfig, RankingResult};
 pub use skill::extract_skills;
-pub use types::{AiEvent, AiSettings};
+pub use types::AiEvent;
