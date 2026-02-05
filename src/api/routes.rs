@@ -1885,3 +1885,254 @@ pub async fn get_ranking_stats(
             .into_response(),
     }
 }
+
+// ============================================================================
+// Skills
+// ============================================================================
+
+#[derive(Debug, Deserialize)]
+pub struct ListSkillsQuery {
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
+}
+
+/// Session reference for skill frequency tracking
+#[derive(Debug, serde::Serialize)]
+pub struct SessionRef {
+    pub id: String,
+    pub title: Option<String>,
+}
+
+/// Skill with frequency information
+#[derive(Debug, serde::Serialize)]
+pub struct SkillWithFrequency {
+    pub id: i64,
+    pub project_id: String,
+    pub session_id: String,
+    pub name: String,
+    pub description: String,
+    pub steps: Vec<String>,
+    pub confidence: f64,
+    pub extracted_at: String,
+    pub frequency: usize,
+    pub sessions: Vec<SessionRef>,
+}
+
+/// List skills for a project with pagination
+pub async fn list_project_skills(
+    State(state): State<AppState>,
+    Path(project_id): Path<String>,
+    Query(query): Query<ListSkillsQuery>,
+) -> impl IntoResponse {
+    let limit = query.limit.unwrap_or(20);
+    let offset = query.offset.unwrap_or(0);
+
+    let result = state
+        .db
+        .with_conn(move |conn| {
+            // First, get the total count
+            let total: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM skills WHERE project_id = ?",
+                    [&project_id],
+                    |row| row.get(0),
+                )
+                .unwrap_or(0);
+
+            // Query skills with pagination
+            let mut stmt = conn.prepare(
+                "SELECT id, project_id, session_id, name, description, steps, confidence, extracted_at
+                 FROM skills
+                 WHERE project_id = ?
+                 ORDER BY extracted_at DESC
+                 LIMIT ? OFFSET ?",
+            )?;
+
+            let skill_rows: Vec<(i64, String, String, String, String, String, f64, String)> = stmt
+                .query_map(rusqlite::params![project_id, limit, offset], |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                        row.get(6)?,
+                        row.get(7)?,
+                    ))
+                })?
+                .filter_map(|r| r.ok())
+                .collect();
+
+            // Collect all session IDs for batch lookup
+            let mut all_session_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+            let mut skill_session_map: std::collections::HashMap<i64, Vec<String>> =
+                std::collections::HashMap::new();
+
+            for (skill_id, _, session_id, _, _, _, _, _) in &skill_rows {
+                all_session_ids.insert(session_id.clone());
+
+                // Also get linked sessions from skill_sessions table
+                let mut linked: Vec<String> = vec![session_id.clone()];
+                if let Ok(mut link_stmt) =
+                    conn.prepare("SELECT session_id FROM skill_sessions WHERE skill_id = ?")
+                {
+                    if let Ok(rows) = link_stmt.query_map([skill_id], |row| row.get::<_, String>(0)) {
+                        for row in rows.flatten() {
+                            if !linked.contains(&row) {
+                                linked.push(row.clone());
+                                all_session_ids.insert(row);
+                            }
+                        }
+                    }
+                }
+                skill_session_map.insert(*skill_id, linked);
+            }
+
+            // Batch fetch session titles
+            let session_titles: std::collections::HashMap<String, Option<String>> =
+                if !all_session_ids.is_empty() {
+                    let ids: Vec<&String> = all_session_ids.iter().collect();
+                    let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+                    let query = format!("SELECT id, title FROM sessions WHERE id IN ({})", placeholders);
+
+                    let mut stmt = conn.prepare(&query).unwrap();
+                    let params: Vec<&dyn rusqlite::ToSql> =
+                        ids.iter().map(|s| *s as &dyn rusqlite::ToSql).collect();
+
+                    stmt.query_map(params.as_slice(), |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+                    })
+                    .map(|rows| rows.filter_map(|r| r.ok()).collect())
+                    .unwrap_or_default()
+                } else {
+                    std::collections::HashMap::new()
+                };
+
+            // Build final skills list
+            let skills: Vec<SkillWithFrequency> = skill_rows
+                .into_iter()
+                .map(|(id, proj_id, sess_id, name, desc, steps_json, conf, extracted)| {
+                    let steps: Vec<String> =
+                        serde_json::from_str(&steps_json).unwrap_or_default();
+
+                    let session_ids = skill_session_map
+                        .get(&id)
+                        .cloned()
+                        .unwrap_or_else(|| vec![sess_id.clone()]);
+
+                    let sessions: Vec<SessionRef> = session_ids
+                        .iter()
+                        .map(|sid| SessionRef {
+                            id: sid.clone(),
+                            title: session_titles.get(sid).cloned().flatten(),
+                        })
+                        .collect();
+
+                    SkillWithFrequency {
+                        id,
+                        project_id: proj_id,
+                        session_id: sess_id,
+                        name,
+                        description: desc,
+                        steps,
+                        confidence: conf,
+                        extracted_at: extracted,
+                        frequency: sessions.len(),
+                        sessions,
+                    }
+                })
+                .collect();
+
+            Ok::<_, rusqlite::Error>((skills, total))
+        })
+        .await;
+
+    match result {
+        Ok((skills, total)) => Json(serde_json::json!({
+            "skills": skills,
+            "total": total
+        }))
+        .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+/// Get skill statistics for a project
+pub async fn get_skill_stats(
+    State(state): State<AppState>,
+    Path(project_id): Path<String>,
+) -> impl IntoResponse {
+    let result = state
+        .db
+        .with_conn(move |conn| {
+            let total_skills: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM skills WHERE project_id = ?",
+                    [&project_id],
+                    |row| row.get(0),
+                )
+                .unwrap_or(0);
+
+            let sessions_with_skills: i64 = conn
+                .query_row(
+                    "SELECT COUNT(DISTINCT session_id) FROM skills WHERE project_id = ?",
+                    [&project_id],
+                    |row| row.get(0),
+                )
+                .unwrap_or(0);
+
+            let unique_skills: i64 = conn
+                .query_row(
+                    "SELECT COUNT(DISTINCT name) FROM skills WHERE project_id = ?",
+                    [&project_id],
+                    |row| row.get(0),
+                )
+                .unwrap_or(0);
+
+            Ok::<_, rusqlite::Error>(serde_json::json!({
+                "total_skills": total_skills,
+                "unique_skills": unique_skills,
+                "sessions_with_skills": sessions_with_skills,
+            }))
+        })
+        .await;
+
+    match result {
+        Ok(stats) => Json(stats).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+/// Delete a skill by ID
+pub async fn delete_skill_by_id(
+    State(state): State<AppState>,
+    Path(skill_id): Path<i64>,
+) -> impl IntoResponse {
+    let result = state
+        .db
+        .with_conn(move |conn| conn.execute("DELETE FROM skills WHERE id = ?", [skill_id]))
+        .await;
+
+    match result {
+        Ok(0) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "Skill not found" })),
+        )
+            .into_response(),
+        Ok(_) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}

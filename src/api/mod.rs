@@ -120,6 +120,10 @@ fn create_router(state: AppState) -> Router {
             "/projects/:id/ranking-stats",
             get(routes::get_ranking_stats),
         )
+        // Skills
+        .route("/projects/:id/skills", get(routes::list_project_skills))
+        .route("/projects/:id/skills/stats", get(routes::get_skill_stats))
+        .route("/skills/:id", delete(routes::delete_skill_by_id))
         // Server-Sent Events
         .route("/events", get(sse::events_handler))
         // Apply auth middleware to all API routes
