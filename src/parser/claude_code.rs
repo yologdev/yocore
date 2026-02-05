@@ -26,6 +26,20 @@ impl ClaudeCodeParser {
         }
     }
 
+    /// Truncate a string at a valid UTF-8 character boundary
+    fn truncate_str(s: &str, max_len: usize) -> String {
+        if s.len() <= max_len {
+            return s.to_string();
+        }
+        let end = s
+            .char_indices()
+            .map(|(i, _)| i)
+            .take_while(|&i| i <= max_len)
+            .last()
+            .unwrap_or(0);
+        format!("{}...", &s[..end])
+    }
+
     /// Parse a single JSONL line into a ParsedEvent
     fn parse_event(
         &self,
@@ -548,11 +562,7 @@ impl ClaudeCodeParser {
                     .and_then(|i| i.get("command"))
                     .and_then(|c| c.as_str())
                 {
-                    if cmd.len() > 50 {
-                        format!("{}...", &cmd[..50])
-                    } else {
-                        cmd.to_string()
-                    }
+                    Self::truncate_str(cmd, 50)
                 } else {
                     "Bash command".to_string()
                 }
@@ -603,11 +613,7 @@ impl ClaudeCodeParser {
                     .and_then(|i| i.get("pattern"))
                     .and_then(|p| p.as_str())
                 {
-                    if pattern.len() > 30 {
-                        format!("Search: {}...", &pattern[..30])
-                    } else {
-                        format!("Search: {}", pattern)
-                    }
+                    format!("Search: {}", Self::truncate_str(pattern, 30))
                 } else {
                     "Grep search".to_string()
                 }
@@ -627,11 +633,7 @@ impl ClaudeCodeParser {
                     .and_then(|i| i.get("description"))
                     .and_then(|d| d.as_str())
                 {
-                    if desc.len() > 50 {
-                        format!("{}...", &desc[..50])
-                    } else {
-                        desc.to_string()
-                    }
+                    Self::truncate_str(desc, 50)
                 } else {
                     "Task agent".to_string()
                 }
@@ -710,11 +712,7 @@ impl ClaudeCodeParser {
             .collect::<Vec<_>>()
             .join(" ");
 
-        if sanitized.len() > max_len {
-            format!("{}...", &sanitized[..max_len])
-        } else {
-            sanitized
-        }
+        Self::truncate_str(&sanitized, max_len)
     }
 
     fn calculate_stats(&self, events: &[ParsedEvent]) -> ParseStats {
@@ -821,14 +819,7 @@ impl ClaudeCodeParser {
         metadata.title = events
             .iter()
             .find(|e| e.role == "user" && e.tool_type.is_none())
-            .map(|e| {
-                let content = &e.search_content;
-                if content.len() > 80 {
-                    format!("{}...", &content[..80])
-                } else {
-                    content.clone()
-                }
-            });
+            .map(|e| Self::truncate_str(&e.search_content, 80));
 
         metadata
     }

@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::mpsc;
+use tokio::sync::{broadcast, mpsc};
 
 /// Events emitted by the file watcher
 #[derive(Debug, Clone)]
@@ -44,8 +44,6 @@ pub enum WatcherEvent {
 pub struct WatcherHandle {
     /// Shutdown signal sender
     shutdown_tx: mpsc::Sender<()>,
-    /// Event receiver (for SSE broadcasting)
-    pub event_rx: mpsc::Receiver<WatcherEvent>,
 }
 
 impl WatcherHandle {
@@ -78,23 +76,23 @@ struct WatcherState {
     watched: HashMap<String, WatchedDirectory>,
     /// Database connection
     db: Arc<Database>,
-    /// Event sender
-    event_tx: mpsc::Sender<WatcherEvent>,
+    /// Broadcast event sender (for SSE)
+    event_tx: broadcast::Sender<WatcherEvent>,
 }
 
 /// Start watching configured paths for session files
-pub async fn start_watcher(config: &Config, db: Arc<Database>) -> Result<WatcherHandle> {
-    let (event_tx, event_rx) = mpsc::channel(100);
+pub async fn start_watcher(
+    config: &Config,
+    db: Arc<Database>,
+    event_tx: broadcast::Sender<WatcherEvent>,
+) -> Result<WatcherHandle> {
     let (shutdown_tx, mut shutdown_rx) = mpsc::channel::<()>(1);
 
     let watch_paths = config.watch_paths();
 
     if watch_paths.is_empty() {
         tracing::info!("No watch paths configured, file watcher idle");
-        return Ok(WatcherHandle {
-            shutdown_tx,
-            event_rx,
-        });
+        return Ok(WatcherHandle { shutdown_tx });
     }
 
     // Initialize watched directories
@@ -108,24 +106,30 @@ pub async fn start_watcher(config: &Config, db: Arc<Database>) -> Result<Watcher
         let project_id = format!("watch_{}", i);
         let mut tracked_files = HashMap::new();
 
-        // Scan existing files
-        if let Ok(entries) = std::fs::read_dir(path) {
-            for entry in entries.flatten() {
-                let file_path = entry.path();
-                if is_session_file(&file_path) {
-                    if let Some(stem) = file_path.file_stem().and_then(|s| s.to_str()) {
-                        let size = std::fs::metadata(&file_path).map(|m| m.len()).unwrap_or(0);
-                        tracked_files.insert(
-                            stem.to_string(),
-                            TrackedFile {
-                                path: file_path,
-                                last_known_size: size,
-                            },
-                        );
+        // Scan existing files recursively
+        fn scan_dir_recursive(dir: &PathBuf, tracked: &mut HashMap<String, TrackedFile>) {
+            if let Ok(entries) = std::fs::read_dir(dir) {
+                for entry in entries.flatten() {
+                    let file_path = entry.path();
+                    if file_path.is_dir() {
+                        // Recursively scan subdirectories
+                        scan_dir_recursive(&file_path, tracked);
+                    } else if is_session_file(&file_path) {
+                        if let Some(stem) = file_path.file_stem().and_then(|s| s.to_str()) {
+                            let size = std::fs::metadata(&file_path).map(|m| m.len()).unwrap_or(0);
+                            tracked.insert(
+                                stem.to_string(),
+                                TrackedFile {
+                                    path: file_path,
+                                    last_known_size: size,
+                                },
+                            );
+                        }
                     }
                 }
             }
         }
+        scan_dir_recursive(path, &mut tracked_files);
 
         let file_count = tracked_files.len();
         tracing::info!(
@@ -152,8 +156,10 @@ pub async fn start_watcher(config: &Config, db: Arc<Database>) -> Result<Watcher
         event_tx,
     }));
 
-    // Create the debouncer
-    let state_clone = Arc::clone(&state);
+    // Create a channel to send events from notify thread to tokio runtime
+    let (notify_tx, mut notify_rx) = mpsc::channel::<PathBuf>(100);
+
+    // Create the debouncer - the callback runs in notify's thread, not tokio
     let debouncer_result = new_debouncer(
         Duration::from_millis(200),
         move |res: std::result::Result<
@@ -161,27 +167,29 @@ pub async fn start_watcher(config: &Config, db: Arc<Database>) -> Result<Watcher
             notify::Error,
         >| {
             if let Ok(events) = res {
-                let state = Arc::clone(&state_clone);
-                // Spawn async handler
-                tokio::spawn(async move {
-                    for event in events {
-                        if event.kind == DebouncedEventKind::Any {
-                            handle_file_event(&state, &event.path).await;
-                        }
+                for event in events {
+                    if event.kind == DebouncedEventKind::Any {
+                        // Send path to tokio task via channel (non-blocking)
+                        let _ = notify_tx.try_send(event.path.clone());
                     }
-                });
+                }
             }
         },
     );
+
+    // Spawn tokio task to handle events from the channel
+    let state_for_handler = Arc::clone(&state);
+    tokio::spawn(async move {
+        while let Some(path) = notify_rx.recv().await {
+            handle_file_event(&state_for_handler, &path).await;
+        }
+    });
 
     let mut debouncer = match debouncer_result {
         Ok(d) => d,
         Err(e) => {
             tracing::error!("Failed to create file watcher: {}", e);
-            return Ok(WatcherHandle {
-                shutdown_tx,
-                event_rx,
-            });
+            return Ok(WatcherHandle { shutdown_tx });
         }
     };
 
@@ -212,10 +220,7 @@ pub async fn start_watcher(config: &Config, db: Arc<Database>) -> Result<Watcher
         tracing::info!("File watcher stopped");
     });
 
-    Ok(WatcherHandle {
-        shutdown_tx,
-        event_rx,
-    })
+    Ok(WatcherHandle { shutdown_tx })
 }
 
 /// Check if a file is a main session file (not an agent file)
@@ -252,12 +257,6 @@ async fn handle_file_event(state: &Arc<tokio::sync::RwLock<WatcherState>>, path:
 
     let path_str = path.to_string_lossy().to_string();
 
-    // Get current file size
-    let new_size = match std::fs::metadata(path) {
-        Ok(m) => m.len(),
-        Err(_) => return, // File might have been deleted
-    };
-
     let file_stem = match path.file_stem().and_then(|s| s.to_str()) {
         Some(stem) => stem.to_string(),
         None => return,
@@ -268,15 +267,22 @@ async fn handle_file_event(state: &Arc<tokio::sync::RwLock<WatcherState>>, path:
         None => return,
     };
 
-    let parent_path = path.parent();
+    // Get current file size - run blocking I/O in spawn_blocking
+    let path_for_stat = path.clone();
+    let new_size = match tokio::task::spawn_blocking(move || std::fs::metadata(&path_for_stat))
+        .await
+    {
+        Ok(Ok(m)) => m.len(),
+        _ => return, // File might have been deleted or task panicked
+    };
 
     let mut state_guard = state.write().await;
 
-    // Find which watched directory this file belongs to
+    // Find which watched directory this file belongs to (file must be within the watched folder)
     let watched_dir = state_guard
         .watched
         .values_mut()
-        .find(|d| parent_path == Some(&d.folder_path));
+        .find(|d| path.starts_with(&d.folder_path));
 
     let watched_dir = match watched_dir {
         Some(d) => d,
@@ -301,13 +307,23 @@ async fn handle_file_event(state: &Arc<tokio::sync::RwLock<WatcherState>>, path:
                 new_size,
             };
 
-            let _ = state_guard.event_tx.send(event).await;
+            let _ = state_guard.event_tx.send(event);
             tracing::debug!(
                 "Session file changed: {} ({} -> {} bytes)",
                 file_stem,
                 previous_size,
                 new_size
             );
+
+            // Re-parse the file to update message count, duration, etc.
+            let db = Arc::clone(&state_guard.db);
+            let event_tx = state_guard.event_tx.clone();
+
+            // Drop the lock before parsing
+            drop(state_guard);
+
+            parse_session_file(&db, &event_tx, &path_str, &file_stem, &parser_type).await;
+            return; // Exit early since we dropped the lock
         }
     } else {
         // New file - track it
@@ -325,7 +341,7 @@ async fn handle_file_event(state: &Arc<tokio::sync::RwLock<WatcherState>>, path:
             file_name: file_name.clone(),
         };
 
-        let _ = state_guard.event_tx.send(event).await;
+        let _ = state_guard.event_tx.send(event);
         tracing::info!("New session detected: {} in {}", file_name, project_id);
 
         // Parse the new file
@@ -341,24 +357,33 @@ async fn handle_file_event(state: &Arc<tokio::sync::RwLock<WatcherState>>, path:
 
 /// Parse a session file and store in database
 async fn parse_session_file(
-    _db: &Arc<Database>,
-    event_tx: &mpsc::Sender<WatcherEvent>,
+    db: &Arc<Database>,
+    event_tx: &broadcast::Sender<WatcherEvent>,
     file_path: &str,
     session_id: &str,
     parser_type: &str,
 ) {
     let path = PathBuf::from(file_path);
+    let file_path_owned = file_path.to_string();
 
-    // Read file content
-    let content = match std::fs::read_to_string(&path) {
-        Ok(c) => c,
-        Err(e) => {
-            let _ = event_tx
-                .send(WatcherEvent::Error {
-                    file_path: file_path.to_string(),
-                    error: format!("Failed to read file: {}", e),
-                })
-                .await;
+    // Read file content - run blocking I/O in spawn_blocking
+    let path_for_read = path.clone();
+    let content = match tokio::task::spawn_blocking(move || std::fs::read_to_string(&path_for_read))
+        .await
+    {
+        Ok(Ok(c)) => c,
+        Ok(Err(e)) => {
+            let _ = event_tx.send(WatcherEvent::Error {
+                file_path: file_path_owned,
+                error: format!("Failed to read file: {}", e),
+            });
+            return;
+        }
+        Err(_) => {
+            let _ = event_tx.send(WatcherEvent::Error {
+                file_path: file_path_owned,
+                error: "spawn_blocking task panicked".to_string(),
+            });
             return;
         }
     };
@@ -381,12 +406,197 @@ async fn parse_session_file(
     let message_count = result.events.len();
     tracing::info!("Parsed session {}: {} messages", session_id, message_count);
 
-    // Store in database (TODO: implement session storage)
-    // For now, just emit the event
-    let _ = event_tx
-        .send(WatcherEvent::SessionParsed {
-            session_id: session_id.to_string(),
-            message_count,
+    // Store session in database
+    if let Err(e) = store_session(db, file_path, session_id, parser_type, &result).await {
+        tracing::error!("Failed to store session {}: {}", session_id, e);
+        let _ = event_tx.send(WatcherEvent::Error {
+            file_path: file_path.to_string(),
+            error: format!("Failed to store session: {}", e),
+        });
+        return;
+    }
+
+    // Emit success event
+    let _ = event_tx.send(WatcherEvent::SessionParsed {
+        session_id: session_id.to_string(),
+        message_count,
+    });
+}
+
+/// Store a parsed session in the database
+async fn store_session(
+    db: &Arc<Database>,
+    file_path: &str,
+    session_id: &str,
+    parser_type: &str,
+    result: &crate::parser::ParseResult,
+) -> std::result::Result<(), String> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let path = PathBuf::from(file_path);
+
+    // Get file metadata - run blocking I/O in spawn_blocking
+    let path_for_stat = path.clone();
+    let (file_size, file_modified) = tokio::task::spawn_blocking(move || {
+        let meta = std::fs::metadata(&path_for_stat).ok();
+        let size = meta.as_ref().map(|m| m.len() as i64);
+        let modified = meta
+            .and_then(|m| m.modified().ok())
+            .map(|t| chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339());
+        (size, modified)
+    })
+    .await
+    .map_err(|e| format!("spawn_blocking failed: {}", e))?;
+
+    // Determine AI tool name
+    let ai_tool = match parser_type {
+        "claude_code" | "claude-code" => "Claude Code",
+        "openclaw" => "OpenClaw",
+        "cursor" => "Cursor",
+        _ => parser_type,
+    }
+    .to_string();
+
+    // Prepare data for database operation
+    let session_id = session_id.to_string();
+    let session_id_for_log = session_id.clone();
+    let file_path = file_path.to_string();
+    let title = result.metadata.title.clone();
+    let events_len = result.events.len() as i64;
+    let duration_ms = result.metadata.duration_ms;
+    let has_code = result.stats.has_code;
+    let has_errors = result.stats.has_errors;
+    let start_time = result.metadata.start_time.clone().unwrap_or_else(|| now.clone());
+    let events = result.events.clone();
+
+    // Run all database operations in spawn_blocking via with_conn
+    let project_id = db
+        .with_conn(move |conn| {
+            use rusqlite::params;
+
+            // Get existing project for this folder (don't auto-create)
+            // If no project exists, skip storing this session
+            let project_id = match get_project_for_path_sync(conn, &path) {
+                Some(id) => id,
+                None => {
+                    // No project exists for this folder - skip silently
+                    // Users must explicitly add projects they want to track
+                    return Ok(None);
+                }
+            };
+
+            // Insert or update session
+            conn.execute(
+                "INSERT INTO sessions (
+                    id, project_id, file_path, title, ai_tool, message_count,
+                    duration_ms, has_code, has_errors, file_size, file_modified,
+                    created_at, indexed_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+                ON CONFLICT(id) DO UPDATE SET
+                    message_count = ?6,
+                    duration_ms = ?7,
+                    has_code = ?8,
+                    has_errors = ?9,
+                    file_size = ?10,
+                    file_modified = ?11,
+                    indexed_at = ?13",
+                params![
+                    session_id,
+                    project_id,
+                    file_path,
+                    title,
+                    ai_tool,
+                    events_len,
+                    duration_ms,
+                    has_code,
+                    has_errors,
+                    file_size,
+                    file_modified,
+                    start_time,
+                    now,
+                ],
+            )
+            .map_err(|e| format!("Failed to insert session: {}", e))?;
+
+            // Delete existing messages for this session (for re-indexing)
+            conn.execute(
+                "DELETE FROM session_messages WHERE session_id = ?",
+                params![session_id],
+            )
+            .map_err(|e| format!("Failed to delete old messages: {}", e))?;
+
+            // Insert messages
+            for event in &events {
+                conn.execute(
+                    "INSERT INTO session_messages (
+                        session_id, sequence_num, role, content_preview, search_content,
+                        has_code, has_error, has_file_changes, tool_name, tool_type, tool_summary,
+                        byte_offset, byte_length, input_tokens, output_tokens,
+                        cache_read_tokens, cache_creation_tokens, model, timestamp
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
+                    params![
+                        session_id,
+                        event.sequence as i64,
+                        event.role,
+                        event.content_preview,
+                        event.search_content,
+                        event.has_code,
+                        event.has_error,
+                        event.has_file_changes,
+                        event.tool_name,
+                        event.tool_type,
+                        event.tool_summary,
+                        event.byte_offset,
+                        event.byte_length,
+                        event.input_tokens,
+                        event.output_tokens,
+                        event.cache_read_tokens,
+                        event.cache_creation_tokens,
+                        event.model,
+                        event.timestamp,
+                    ],
+                )
+                .map_err(|e| format!("Failed to insert message {}: {}", event.sequence, e))?;
+            }
+
+            Ok::<Option<String>, String>(Some(project_id))
         })
-        .await;
+        .await?;
+
+    // If no project was found, the session was skipped
+    let project_id = match project_id {
+        Some(id) => id,
+        None => return Ok(()),
+    };
+
+    tracing::info!(
+        "Stored session {} with {} messages in project {}",
+        session_id_for_log,
+        events_len,
+        project_id
+    );
+
+    Ok(())
+}
+
+/// Get an existing project for the given session file path (does NOT auto-create)
+/// Returns None if no project exists for this folder - session will be skipped
+fn get_project_for_path_sync(
+    conn: &rusqlite::Connection,
+    session_path: &PathBuf,
+) -> Option<String> {
+    use rusqlite::params;
+
+    // Get parent directory as project folder
+    let folder_path = session_path
+        .parent()?
+        .to_string_lossy()
+        .to_string();
+
+    // Check if project already exists for this folder
+    conn.query_row(
+        "SELECT id FROM projects WHERE folder_path = ?",
+        params![folder_path],
+        |row| row.get(0),
+    )
+    .ok()
 }
