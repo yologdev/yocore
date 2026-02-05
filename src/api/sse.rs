@@ -203,9 +203,16 @@ pub async fn events_handler(
     let ai_rx = state.ai_event_tx.subscribe();
 
     // Create stream from watcher broadcast receiver
+    // Filter out events for untracked sessions (project_id starting with "watch_")
     let watcher_stream = BroadcastStream::new(watcher_rx).filter_map(|result| {
         match result {
             Ok(watcher_event) => {
+                // Skip events for untracked sessions (temp directories, etc.)
+                if let WatcherEvent::NewSession { ref project_id, .. } = watcher_event {
+                    if project_id.starts_with("watch_") {
+                        return None;
+                    }
+                }
                 let sse_event: SseEvent = watcher_event.into();
                 let event_type = get_event_type(&sse_event);
                 let data = serde_json::to_string(&sse_event).unwrap_or_default();
