@@ -1496,7 +1496,11 @@ pub async fn update_agent_summary(
 #[derive(Debug, Deserialize)]
 pub struct ListMemoriesQuery {
     pub project_id: Option<String>,
+    pub session_id: Option<String>,
+    /// Single memory type (deprecated, use memory_types)
     pub memory_type: Option<String>,
+    /// Comma-separated list of memory types (e.g., "decision,fact")
+    pub memory_types: Option<String>,
     pub state: Option<String>,
     pub limit: Option<i64>,
     pub offset: Option<i64>,
@@ -1504,6 +1508,14 @@ pub struct ListMemoriesQuery {
     pub sort_by: Option<String>,
     /// Sort order: "asc" or "desc" (default)
     pub sort_order: Option<String>,
+    /// Minimum confidence threshold (0.0 - 1.0)
+    pub min_confidence: Option<f64>,
+    /// Filter to only validated memories
+    pub is_validated: Option<bool>,
+    /// Single tag (deprecated, use tags)
+    pub tag: Option<String>,
+    /// Comma-separated list of tags - memories must contain ALL tags (AND logic)
+    pub tags: Option<String>,
 }
 
 /// Resolve a project identifier to a UUID.
@@ -1554,24 +1566,55 @@ pub async fn list_memories(
             let limit = query.limit.unwrap_or(100);
             let offset = query.offset.unwrap_or(0);
 
-            let mut conditions = vec!["1=1"];
+            let mut conditions = vec!["1=1".to_string()];
             let mut params: Vec<Box<dyn rusqlite::ToSql>> = vec![];
 
             if let Some(project_id_input) = query.project_id {
                 // Resolve folder-path-based ID to actual UUID
                 let resolved_id = resolve_project_id(conn, &project_id_input)
                     .unwrap_or(project_id_input);
-                conditions.push("project_id = ?");
+                conditions.push("project_id = ?".to_string());
                 params.push(Box::new(resolved_id));
             }
-            if let Some(memory_type) = query.memory_type {
-                conditions.push("memory_type = ?");
+            if let Some(session_id) = query.session_id {
+                conditions.push("session_id = ?".to_string());
+                params.push(Box::new(session_id));
+            }
+
+            // Handle multiple memory types (OR logic)
+            if let Some(memory_types) = query.memory_types {
+                let types: Vec<&str> = memory_types.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+                if !types.is_empty() {
+                    let placeholders: Vec<String> = types.iter().map(|_| "?".to_string()).collect();
+                    conditions.push(format!("memory_type IN ({})", placeholders.join(",")));
+                    for t in types {
+                        params.push(Box::new(t.to_string()));
+                    }
+                }
+            } else if let Some(memory_type) = query.memory_type {
+                // Fallback to single type (deprecated)
+                conditions.push("memory_type = ?".to_string());
                 params.push(Box::new(memory_type));
             }
+
             if let Some(memory_state) = query.state {
-                conditions.push("state = ?");
+                conditions.push("state = ?".to_string());
                 params.push(Box::new(memory_state));
             }
+            if let Some(min_conf) = query.min_confidence {
+                conditions.push("confidence >= ?".to_string());
+                params.push(Box::new(min_conf));
+            }
+            if let Some(is_validated) = query.is_validated {
+                if is_validated {
+                    conditions.push("is_validated = 1".to_string());
+                }
+            }
+
+            // Handle multiple tags (AND logic - memory must contain ALL specified tags)
+            let tags_to_filter: Option<Vec<String>> = query.tags
+                .or(query.tag.map(|t| t.to_string()))
+                .map(|t| t.split(',').map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty()).collect());
 
             params.push(Box::new(limit));
             params.push(Box::new(offset));
@@ -1588,6 +1631,16 @@ pub async fn list_memories(
                 _ => "DESC", // Default for unknown values
             };
 
+            // For tag filtering, we need a larger initial fetch if filtering by tags
+            // since tag matching is done in Rust (tags are stored as JSON arrays)
+            let effective_limit = if tags_to_filter.is_some() { limit * 5 } else { limit };
+            let effective_offset = if tags_to_filter.is_some() { 0 } else { offset };
+
+            // Update limit/offset params (they're at the end)
+            let params_len = params.len();
+            params[params_len - 2] = Box::new(effective_limit);
+            params[params_len - 1] = Box::new(effective_offset);
+
             let sql = format!(
                 "SELECT id, project_id, session_id, memory_type, title, content,
                         context, tags, confidence, is_validated, state, extracted_at
@@ -1603,7 +1656,7 @@ pub async fn list_memories(
             let params_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
             let mut stmt = conn.prepare(&sql)?;
 
-            let memories: Vec<serde_json::Value> = stmt
+            let mut memories: Vec<serde_json::Value> = stmt
                 .query_map(params_refs.as_slice(), |row| {
                     Ok(serde_json::json!({
                         "id": row.get::<_, i64>(0)?,
@@ -1622,6 +1675,27 @@ pub async fn list_memories(
                 })?
                 .filter_map(|r| r.ok())
                 .collect();
+
+            // Apply tag filtering in Rust (tags are stored as JSON arrays)
+            if let Some(ref filter_tags) = tags_to_filter {
+                memories.retain(|m| {
+                    let tags_str = m.get("tags").and_then(|t| t.as_str()).unwrap_or("[]");
+                    // Parse JSON array
+                    let memory_tags: Vec<String> = serde_json::from_str(tags_str)
+                        .unwrap_or_default();
+                    let memory_tags_lower: Vec<String> = memory_tags.iter().map(|t| t.to_lowercase()).collect();
+                    // All filter tags must be present (AND logic)
+                    filter_tags.iter().all(|ft| memory_tags_lower.contains(ft))
+                });
+                // Apply pagination after filtering
+                let start = offset as usize;
+                let end = (offset + limit) as usize;
+                if start < memories.len() {
+                    memories = memories[start..memories.len().min(end)].to_vec();
+                } else {
+                    memories = vec![];
+                }
+            }
 
             Ok::<_, rusqlite::Error>(memories)
         })
@@ -1986,11 +2060,11 @@ pub async fn get_memory_tags(
     let result = state
         .db
         .with_conn(move |conn| {
-            // Get all tags from memories, split by comma, count occurrences
+            // Get all tags from memories (stored as JSON arrays)
             let mut stmt = conn.prepare(
                 "SELECT m.tags FROM memories m
                  JOIN sessions s ON m.session_id = s.id
-                 WHERE s.project_id = ? AND m.state != 'removed' AND m.tags IS NOT NULL AND m.tags != ''",
+                 WHERE s.project_id = ? AND m.state != 'removed' AND m.tags IS NOT NULL AND m.tags != '' AND m.tags != '[]'",
             )?;
 
             let tag_strings: Vec<String> = stmt
@@ -1998,13 +2072,17 @@ pub async fn get_memory_tags(
                 .filter_map(|r| r.ok())
                 .collect();
 
-            // Count tag occurrences
+            // Count tag occurrences - parse JSON arrays
             let mut tag_counts: std::collections::HashMap<String, usize> =
                 std::collections::HashMap::new();
-            for tags_str in tag_strings {
-                for tag in tags_str.split(',').map(|t| t.trim().to_lowercase()) {
-                    if !tag.is_empty() {
-                        *tag_counts.entry(tag).or_insert(0) += 1;
+            for tags_json in tag_strings {
+                // Parse as JSON array
+                if let Ok(tags_array) = serde_json::from_str::<Vec<String>>(&tags_json) {
+                    for tag in tags_array {
+                        let tag_lower = tag.trim().to_lowercase();
+                        if !tag_lower.is_empty() {
+                            *tag_counts.entry(tag_lower).or_insert(0) += 1;
+                        }
                     }
                 }
             }
