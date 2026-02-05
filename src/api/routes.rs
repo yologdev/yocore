@@ -2125,6 +2125,73 @@ pub async fn get_ai_cli_status() -> impl IntoResponse {
     }))
 }
 
+/// Session requiring AI processing
+#[derive(Debug, Serialize)]
+pub struct PendingAiSession {
+    pub session_id: String,
+    pub project_id: String,
+    pub needs_title: bool,
+    pub needs_memory_extraction: bool,
+    pub needs_skill_extraction: bool,
+    pub message_count: i64,
+}
+
+/// Get sessions that need AI processing (title, memories, skills)
+/// Used for startup recovery when Desktop starts
+pub async fn get_pending_ai_sessions(State(state): State<AppState>) -> impl IntoResponse {
+    let result = state
+        .db
+        .with_conn(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT
+                    s.id as session_id,
+                    s.project_id,
+                    s.message_count,
+                    (s.title IS NULL AND COALESCE(s.title_edited, 0) = 0) as needs_title,
+                    (s.memories_extracted_at IS NULL) as needs_memory,
+                    (s.skills_extracted_at IS NULL) as needs_skills
+                FROM sessions s
+                INNER JOIN projects p ON s.project_id = p.id
+                WHERE p.auto_sync = 1
+                  AND COALESCE(s.import_status, 'success') = 'success'
+                  AND s.message_count >= 25
+                  AND (
+                    (s.title IS NULL AND COALESCE(s.title_edited, 0) = 0)
+                    OR s.memories_extracted_at IS NULL
+                    OR s.skills_extracted_at IS NULL
+                  )
+                ORDER BY s.created_at DESC
+                LIMIT 50",
+            )?;
+
+            let sessions: Vec<PendingAiSession> = stmt
+                .query_map([], |row| {
+                    Ok(PendingAiSession {
+                        session_id: row.get(0)?,
+                        project_id: row.get(1)?,
+                        message_count: row.get(2)?,
+                        needs_title: row.get::<_, i32>(3)? != 0,
+                        needs_memory_extraction: row.get::<_, i32>(4)? != 0,
+                        needs_skill_extraction: row.get::<_, i32>(5)? != 0,
+                    })
+                })?
+                .filter_map(|r| r.ok())
+                .collect();
+
+            Ok::<_, rusqlite::Error>(sessions)
+        })
+        .await;
+
+    match result {
+        Ok(sessions) => Json(serde_json::json!({ "sessions": sessions })).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
 /// Get AI settings
 pub async fn get_ai_settings(State(state): State<AppState>) -> impl IntoResponse {
     let result = state
