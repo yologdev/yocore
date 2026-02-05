@@ -298,6 +298,319 @@ pub async fn delete_project(
 }
 
 // ============================================================================
+// Project Analytics
+// ============================================================================
+
+#[derive(Debug, serde::Serialize)]
+pub struct ProjectStats {
+    pub total_sessions: i64,
+    pub total_messages: i64,
+    pub total_duration_ms: i64,
+    pub messages_with_errors: i64,
+    pub total_input_tokens: i64,
+    pub total_output_tokens: i64,
+    pub total_cache_read_tokens: i64,
+    pub total_cache_creation_tokens: i64,
+    pub models_used: std::collections::HashMap<String, i64>,
+    pub user_messages: i64,
+    pub assistant_messages: i64,
+    pub tool_uses: i64,
+    pub tool_results: i64,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct SessionVibeData {
+    pub session_id: String,
+    pub created_at: String,
+    pub duration_ms: Option<i64>,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub message_count: i64,
+    pub user_messages: i64,
+    pub assistant_messages: i64,
+    pub tool_uses: i64,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct DailyTokens {
+    pub date: String,
+    pub total_tokens: i64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cache_read_tokens: i64,
+    pub cache_creation_tokens: i64,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct DailyErrors {
+    pub date: String,
+    pub error_count: i64,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct DailyVibeMetrics {
+    pub date: String,
+    pub total_messages: i64,
+    pub user_messages: i64,
+    pub duration_ms: i64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cache_read_tokens: i64,
+    pub cache_creation_tokens: i64,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct ProjectAnalyticsBatch {
+    pub stats: ProjectStats,
+    pub session_metrics: Vec<SessionVibeData>,
+    pub active_dates: Vec<String>,
+    pub daily_tokens: Vec<DailyTokens>,
+    pub daily_errors: Vec<DailyErrors>,
+    pub daily_vibe: Vec<DailyVibeMetrics>,
+}
+
+/// Get comprehensive project analytics in a single call
+pub async fn get_project_analytics(
+    State(state): State<AppState>,
+    Path(project_id): Path<String>,
+) -> impl IntoResponse {
+    let result = state
+        .db
+        .with_conn(move |conn| {
+            // 1. Project Stats
+            let total_sessions: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sessions WHERE project_id = ? AND is_hidden = 0",
+                    [&project_id],
+                    |row| row.get(0),
+                )
+                .unwrap_or(0);
+
+            let total_duration_ms: i64 = conn
+                .query_row(
+                    "SELECT COALESCE(SUM(duration_ms), 0) FROM sessions WHERE project_id = ? AND is_hidden = 0",
+                    [&project_id],
+                    |row| row.get(0),
+                )
+                .unwrap_or(0);
+
+            // Message stats from session_messages
+            let (total_messages, messages_with_errors, user_messages, assistant_messages, tool_uses, tool_results): (i64, i64, i64, i64, i64, i64) = conn
+                .query_row(
+                    "SELECT
+                        COUNT(*),
+                        SUM(CASE WHEN has_error = 1 THEN 1 ELSE 0 END),
+                        SUM(CASE WHEN role = 'user' THEN 1 ELSE 0 END),
+                        SUM(CASE WHEN role = 'assistant' THEN 1 ELSE 0 END),
+                        SUM(CASE WHEN role = 'assistant' AND tool_name IS NOT NULL THEN 1 ELSE 0 END),
+                        SUM(CASE WHEN role = 'user' AND tool_name IS NOT NULL THEN 1 ELSE 0 END)
+                     FROM session_messages sm
+                     JOIN sessions s ON sm.session_id = s.id
+                     WHERE s.project_id = ? AND s.is_hidden = 0",
+                    [&project_id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
+                )
+                .unwrap_or((0, 0, 0, 0, 0, 0));
+
+            // Token totals
+            let (total_input_tokens, total_output_tokens, total_cache_read_tokens, total_cache_creation_tokens): (i64, i64, i64, i64) = conn
+                .query_row(
+                    "SELECT
+                        COALESCE(SUM(input_tokens), 0),
+                        COALESCE(SUM(output_tokens), 0),
+                        COALESCE(SUM(cache_read_tokens), 0),
+                        COALESCE(SUM(cache_creation_tokens), 0)
+                     FROM session_messages sm
+                     JOIN sessions s ON sm.session_id = s.id
+                     WHERE s.project_id = ? AND s.is_hidden = 0",
+                    [&project_id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                )
+                .unwrap_or((0, 0, 0, 0));
+
+            // Models used
+            let mut models_used: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
+            if let Ok(mut stmt) = conn.prepare(
+                "SELECT model, COUNT(*) FROM session_messages sm
+                 JOIN sessions s ON sm.session_id = s.id
+                 WHERE s.project_id = ? AND s.is_hidden = 0 AND model IS NOT NULL
+                 GROUP BY model"
+            ) {
+                if let Ok(rows) = stmt.query_map([&project_id], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+                }) {
+                    for row in rows.flatten() {
+                        models_used.insert(row.0, row.1);
+                    }
+                }
+            }
+
+            let stats = ProjectStats {
+                total_sessions,
+                total_messages,
+                total_duration_ms,
+                messages_with_errors,
+                total_input_tokens,
+                total_output_tokens,
+                total_cache_read_tokens,
+                total_cache_creation_tokens,
+                models_used,
+                user_messages,
+                assistant_messages,
+                tool_uses,
+                tool_results,
+            };
+
+            // 2. Session Metrics
+            let mut session_metrics: Vec<SessionVibeData> = Vec::new();
+            if let Ok(mut stmt) = conn.prepare(
+                "SELECT s.id, s.created_at, s.duration_ms,
+                        COALESCE(SUM(sm.input_tokens), 0),
+                        COALESCE(SUM(sm.output_tokens), 0),
+                        COUNT(sm.id),
+                        SUM(CASE WHEN sm.role = 'user' THEN 1 ELSE 0 END),
+                        SUM(CASE WHEN sm.role = 'assistant' THEN 1 ELSE 0 END),
+                        SUM(CASE WHEN sm.role = 'assistant' AND sm.tool_name IS NOT NULL THEN 1 ELSE 0 END)
+                 FROM sessions s
+                 LEFT JOIN session_messages sm ON s.id = sm.session_id
+                 WHERE s.project_id = ? AND s.is_hidden = 0
+                 GROUP BY s.id
+                 ORDER BY s.created_at DESC"
+            ) {
+                if let Ok(rows) = stmt.query_map([&project_id], |row| {
+                    Ok(SessionVibeData {
+                        session_id: row.get(0)?,
+                        created_at: row.get(1)?,
+                        duration_ms: row.get(2)?,
+                        input_tokens: row.get(3)?,
+                        output_tokens: row.get(4)?,
+                        message_count: row.get(5)?,
+                        user_messages: row.get(6)?,
+                        assistant_messages: row.get(7)?,
+                        tool_uses: row.get(8)?,
+                    })
+                }) {
+                    session_metrics = rows.filter_map(|r| r.ok()).collect();
+                }
+            }
+
+            // 3. Active Dates
+            let mut active_dates: Vec<String> = Vec::new();
+            if let Ok(mut stmt) = conn.prepare(
+                "SELECT DISTINCT DATE(created_at) FROM sessions
+                 WHERE project_id = ? AND is_hidden = 0
+                 ORDER BY DATE(created_at) DESC"
+            ) {
+                if let Ok(rows) = stmt.query_map([&project_id], |row| row.get::<_, String>(0)) {
+                    active_dates = rows.filter_map(|r| r.ok()).collect();
+                }
+            }
+
+            // 4. Daily Tokens
+            let mut daily_tokens: Vec<DailyTokens> = Vec::new();
+            if let Ok(mut stmt) = conn.prepare(
+                "SELECT DATE(s.created_at) as date,
+                        COALESCE(SUM(sm.input_tokens), 0) + COALESCE(SUM(sm.output_tokens), 0),
+                        COALESCE(SUM(sm.input_tokens), 0),
+                        COALESCE(SUM(sm.output_tokens), 0),
+                        COALESCE(SUM(sm.cache_read_tokens), 0),
+                        COALESCE(SUM(sm.cache_creation_tokens), 0)
+                 FROM sessions s
+                 LEFT JOIN session_messages sm ON s.id = sm.session_id
+                 WHERE s.project_id = ? AND s.is_hidden = 0
+                 GROUP BY DATE(s.created_at)
+                 ORDER BY date DESC"
+            ) {
+                if let Ok(rows) = stmt.query_map([&project_id], |row| {
+                    Ok(DailyTokens {
+                        date: row.get(0)?,
+                        total_tokens: row.get(1)?,
+                        input_tokens: row.get(2)?,
+                        output_tokens: row.get(3)?,
+                        cache_read_tokens: row.get(4)?,
+                        cache_creation_tokens: row.get(5)?,
+                    })
+                }) {
+                    daily_tokens = rows.filter_map(|r| r.ok()).collect();
+                }
+            }
+
+            // 5. Daily Errors
+            let mut daily_errors: Vec<DailyErrors> = Vec::new();
+            if let Ok(mut stmt) = conn.prepare(
+                "SELECT DATE(s.created_at) as date, SUM(CASE WHEN sm.has_error = 1 THEN 1 ELSE 0 END)
+                 FROM sessions s
+                 LEFT JOIN session_messages sm ON s.id = sm.session_id
+                 WHERE s.project_id = ? AND s.is_hidden = 0
+                 GROUP BY DATE(s.created_at)
+                 HAVING SUM(CASE WHEN sm.has_error = 1 THEN 1 ELSE 0 END) > 0
+                 ORDER BY date DESC"
+            ) {
+                if let Ok(rows) = stmt.query_map([&project_id], |row| {
+                    Ok(DailyErrors {
+                        date: row.get(0)?,
+                        error_count: row.get(1)?,
+                    })
+                }) {
+                    daily_errors = rows.filter_map(|r| r.ok()).collect();
+                }
+            }
+
+            // 6. Daily Vibe Metrics
+            let mut daily_vibe: Vec<DailyVibeMetrics> = Vec::new();
+            if let Ok(mut stmt) = conn.prepare(
+                "SELECT DATE(s.created_at) as date,
+                        COUNT(sm.id),
+                        SUM(CASE WHEN sm.role = 'user' THEN 1 ELSE 0 END),
+                        COALESCE(SUM(s.duration_ms), 0),
+                        COALESCE(SUM(sm.input_tokens), 0),
+                        COALESCE(SUM(sm.output_tokens), 0),
+                        COALESCE(SUM(sm.cache_read_tokens), 0),
+                        COALESCE(SUM(sm.cache_creation_tokens), 0)
+                 FROM sessions s
+                 LEFT JOIN session_messages sm ON s.id = sm.session_id
+                 WHERE s.project_id = ? AND s.is_hidden = 0
+                 GROUP BY DATE(s.created_at)
+                 ORDER BY date DESC"
+            ) {
+                if let Ok(rows) = stmt.query_map([&project_id], |row| {
+                    Ok(DailyVibeMetrics {
+                        date: row.get(0)?,
+                        total_messages: row.get(1)?,
+                        user_messages: row.get(2)?,
+                        duration_ms: row.get(3)?,
+                        input_tokens: row.get(4)?,
+                        output_tokens: row.get(5)?,
+                        cache_read_tokens: row.get(6)?,
+                        cache_creation_tokens: row.get(7)?,
+                    })
+                }) {
+                    daily_vibe = rows.filter_map(|r| r.ok()).collect();
+                }
+            }
+
+            Ok::<_, rusqlite::Error>(ProjectAnalyticsBatch {
+                stats,
+                session_metrics,
+                active_dates,
+                daily_tokens,
+                daily_errors,
+                daily_vibe,
+            })
+        })
+        .await;
+
+    match result {
+        Ok(analytics) => Json(analytics).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+// ============================================================================
 // Sessions
 // ============================================================================
 

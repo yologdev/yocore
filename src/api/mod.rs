@@ -83,6 +83,8 @@ fn create_router(state: AppState) -> Router {
         .route("/projects/:id", get(routes::get_project))
         .route("/projects/:id", patch(routes::update_project))
         .route("/projects/:id", delete(routes::delete_project))
+        // Project Analytics
+        .route("/projects/:id/analytics", get(routes::get_project_analytics))
         // Sessions
         .route("/sessions", get(routes::list_sessions))
         .route("/sessions/:id", get(routes::get_session))
