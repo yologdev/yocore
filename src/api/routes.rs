@@ -1268,6 +1268,165 @@ pub async fn delete_memory(
     }
 }
 
+/// Memory type count for statistics
+#[derive(Debug, serde::Serialize)]
+pub struct MemoryTypeCount {
+    #[serde(rename = "type")]
+    pub memory_type: String,
+    pub count: i64,
+}
+
+/// Memory statistics response
+#[derive(Debug, serde::Serialize)]
+pub struct MemoryStatsResponse {
+    pub total_count: i64,
+    pub by_type: Vec<MemoryTypeCount>,
+    pub validated_count: i64,
+    pub avg_confidence: f64,
+    pub sessions_with_memories: i64,
+}
+
+/// Get memory statistics for a project
+pub async fn get_memory_stats(
+    State(state): State<AppState>,
+    Path(project_id): Path<String>,
+) -> impl IntoResponse {
+    let result = state
+        .db
+        .with_conn(move |conn| {
+            // Total count (excluding removed)
+            let total_count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM memories m
+                     JOIN sessions s ON m.session_id = s.id
+                     WHERE s.project_id = ? AND m.state != 'removed'",
+                    [&project_id],
+                    |row| row.get(0),
+                )
+                .unwrap_or(0);
+
+            // Count by type
+            let mut by_type_stmt = conn.prepare(
+                "SELECT m.memory_type, COUNT(*) as count FROM memories m
+                 JOIN sessions s ON m.session_id = s.id
+                 WHERE s.project_id = ? AND m.state != 'removed'
+                 GROUP BY m.memory_type
+                 ORDER BY count DESC",
+            )?;
+            let by_type: Vec<MemoryTypeCount> = by_type_stmt
+                .query_map([&project_id], |row| {
+                    Ok(MemoryTypeCount {
+                        memory_type: row.get(0)?,
+                        count: row.get(1)?,
+                    })
+                })?
+                .filter_map(|r| r.ok())
+                .collect();
+
+            // Validated count
+            let validated_count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM memories m
+                     JOIN sessions s ON m.session_id = s.id
+                     WHERE s.project_id = ? AND m.state != 'removed' AND m.is_validated = 1",
+                    [&project_id],
+                    |row| row.get(0),
+                )
+                .unwrap_or(0);
+
+            // Average confidence
+            let avg_confidence: f64 = conn
+                .query_row(
+                    "SELECT AVG(m.confidence) FROM memories m
+                     JOIN sessions s ON m.session_id = s.id
+                     WHERE s.project_id = ? AND m.state != 'removed'",
+                    [&project_id],
+                    |row| row.get::<_, Option<f64>>(0),
+                )
+                .unwrap_or(None)
+                .unwrap_or(0.0);
+
+            // Sessions with memories
+            let sessions_with_memories: i64 = conn
+                .query_row(
+                    "SELECT COUNT(DISTINCT m.session_id) FROM memories m
+                     JOIN sessions s ON m.session_id = s.id
+                     WHERE s.project_id = ? AND m.state != 'removed'",
+                    [&project_id],
+                    |row| row.get(0),
+                )
+                .unwrap_or(0);
+
+            Ok::<_, rusqlite::Error>(MemoryStatsResponse {
+                total_count,
+                by_type,
+                validated_count,
+                avg_confidence,
+                sessions_with_memories,
+            })
+        })
+        .await;
+
+    match result {
+        Ok(stats) => Json(stats).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+/// Get top 25 most-used tags for a project's memories
+pub async fn get_memory_tags(
+    State(state): State<AppState>,
+    Path(project_id): Path<String>,
+) -> impl IntoResponse {
+    let result = state
+        .db
+        .with_conn(move |conn| {
+            // Get all tags from memories, split by comma, count occurrences
+            let mut stmt = conn.prepare(
+                "SELECT m.tags FROM memories m
+                 JOIN sessions s ON m.session_id = s.id
+                 WHERE s.project_id = ? AND m.state != 'removed' AND m.tags IS NOT NULL AND m.tags != ''",
+            )?;
+
+            let tag_strings: Vec<String> = stmt
+                .query_map([&project_id], |row| row.get::<_, String>(0))?
+                .filter_map(|r| r.ok())
+                .collect();
+
+            // Count tag occurrences
+            let mut tag_counts: std::collections::HashMap<String, usize> =
+                std::collections::HashMap::new();
+            for tags_str in tag_strings {
+                for tag in tags_str.split(',').map(|t| t.trim().to_lowercase()) {
+                    if !tag.is_empty() {
+                        *tag_counts.entry(tag).or_insert(0) += 1;
+                    }
+                }
+            }
+
+            // Sort by count descending, take top 25
+            let mut sorted: Vec<(String, usize)> = tag_counts.into_iter().collect();
+            sorted.sort_by(|a, b| b.1.cmp(&a.1));
+            let tags: Vec<String> = sorted.into_iter().take(25).map(|(tag, _)| tag).collect();
+
+            Ok::<_, rusqlite::Error>(tags)
+        })
+        .await;
+
+    match result {
+        Ok(tags) => Json(serde_json::json!({ "tags": tags })).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
 // ============================================================================
 // AI Features
 // ============================================================================
@@ -1894,6 +2053,7 @@ pub async fn get_ranking_stats(
 pub struct ListSkillsQuery {
     pub limit: Option<i64>,
     pub offset: Option<i64>,
+    pub sort_by: Option<String>,
 }
 
 /// Session reference for skill frequency tracking
@@ -1918,7 +2078,7 @@ pub struct SkillWithFrequency {
     pub sessions: Vec<SessionRef>,
 }
 
-/// List skills for a project with pagination
+/// List skills for a project with pagination and sorting
 pub async fn list_project_skills(
     State(state): State<AppState>,
     Path(project_id): Path<String>,
@@ -1926,6 +2086,7 @@ pub async fn list_project_skills(
 ) -> impl IntoResponse {
     let limit = query.limit.unwrap_or(20);
     let offset = query.offset.unwrap_or(0);
+    let sort_by = query.sort_by.clone();
 
     let result = state
         .db
@@ -1939,14 +2100,34 @@ pub async fn list_project_skills(
                 )
                 .unwrap_or(0);
 
-            // Query skills with pagination
-            let mut stmt = conn.prepare(
-                "SELECT id, project_id, session_id, name, description, steps, confidence, extracted_at
-                 FROM skills
-                 WHERE project_id = ?
-                 ORDER BY extracted_at DESC
-                 LIMIT ? OFFSET ?",
-            )?;
+            // For frequency sorting, we need to use a subquery to count linked sessions
+            let is_frequency_sort = sort_by.as_deref() == Some("frequency");
+
+            let sql = if is_frequency_sort {
+                // Frequency = 1 (original session) + count of linked sessions
+                // Only use subquery in ORDER BY, select same columns as non-frequency query
+                "SELECT s.id, s.project_id, s.session_id, s.name, s.description, s.steps, s.confidence, s.extracted_at
+                 FROM skills s
+                 WHERE s.project_id = ?
+                 ORDER BY (1 + COALESCE((SELECT COUNT(*) FROM skill_sessions WHERE skill_id = s.id), 0)) DESC, s.extracted_at DESC
+                 LIMIT ? OFFSET ?".to_string()
+            } else {
+                let order_clause = match sort_by.as_deref() {
+                    Some("date_newest") => "ORDER BY extracted_at DESC",
+                    Some("date_oldest") => "ORDER BY extracted_at ASC",
+                    Some("confidence") => "ORDER BY confidence DESC",
+                    _ => "ORDER BY extracted_at DESC",
+                };
+                format!(
+                    "SELECT id, project_id, session_id, name, description, steps, confidence, extracted_at
+                     FROM skills
+                     WHERE project_id = ?
+                     {}
+                     LIMIT ? OFFSET ?",
+                    order_clause
+                )
+            };
+            let mut stmt = conn.prepare(&sql)?;
 
             let skill_rows: Vec<(i64, String, String, String, String, String, f64, String)> = stmt
                 .query_map(rusqlite::params![project_id, limit, offset], |row| {

@@ -103,6 +103,9 @@ fn create_router(state: AppState) -> Router {
         .route("/memories/:id", get(routes::get_memory))
         .route("/memories/:id", patch(routes::update_memory))
         .route("/memories/:id", delete(routes::delete_memory))
+        // Memory Stats & Tags
+        .route("/projects/:id/memory-stats", get(routes::get_memory_stats))
+        .route("/projects/:id/memory-tags", get(routes::get_memory_tags))
         // Markers
         .route("/markers/:id", delete(routes::delete_marker))
         // AI Features
