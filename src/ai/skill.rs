@@ -183,27 +183,60 @@ async fn get_session_content(
     .await
 }
 
-/// Check if skill with same name already exists
-async fn find_duplicate(
+/// Check if a similar skill already exists (exact match or semantic similarity)
+/// Returns the existing skill ID if found
+async fn find_similar_skill(
     db: &Arc<Database>,
     project_id: &str,
     name: &str,
+    description: &str,
 ) -> Result<Option<i64>, String> {
     let project_id = project_id.to_string();
     let name = name.to_string();
+    let description = description.to_string();
 
     db.with_conn(move |conn| {
-        let result: Result<i64, _> = conn.query_row(
+        // Fast path: exact name match
+        let exact: Result<i64, _> = conn.query_row(
             "SELECT id FROM skills WHERE project_id = ? AND name = ?",
             rusqlite::params![project_id, name],
             |row| row.get(0),
         );
-
-        match result {
-            Ok(id) => Ok(Some(id)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(e.to_string()),
+        if let Ok(id) = exact {
+            return Ok(Some(id));
         }
+
+        // Similarity check against all skills for this project
+        let mut stmt = conn
+            .prepare("SELECT id, name, description FROM skills WHERE project_id = ?")
+            .map_err(|e| e.to_string())?;
+
+        let existing: Vec<(i64, String, String)> = stmt
+            .query_map(rusqlite::params![project_id], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        for (id, existing_name, existing_desc) in &existing {
+            if super::similarity::is_similar_skill(
+                &name,
+                &description,
+                existing_name,
+                existing_desc,
+                super::similarity::SKILL_SIMILARITY_THRESHOLD,
+            ) {
+                tracing::debug!(
+                    "Similar skill found: \"{}\" ≈ \"{}\"",
+                    &name,
+                    existing_name
+                );
+                return Ok(Some(*id));
+            }
+        }
+
+        Ok(None)
     })
     .await
 }
@@ -382,8 +415,8 @@ pub async fn extract_skills(
     let mut duplicates = 0;
 
     for skill in skills {
-        // Check for duplicates
-        match find_duplicate(db, &project_id, &skill.name).await {
+        // Check for duplicates (exact match + semantic similarity)
+        match find_similar_skill(db, &project_id, &skill.name, &skill.description).await {
             Ok(Some(existing_id)) => {
                 // Link this session to the existing skill
                 if let Err(e) = link_session_to_skill(db, existing_id, session_id).await {

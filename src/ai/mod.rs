@@ -15,6 +15,7 @@ pub mod marker;
 pub mod memory;
 pub mod queue;
 pub mod ranking;
+pub mod similarity;
 pub mod skill;
 pub mod title;
 pub mod types;

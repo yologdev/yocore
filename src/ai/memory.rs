@@ -162,17 +162,20 @@ async fn get_session_content(
     .await
 }
 
-/// Check if memory with same title already exists
-async fn is_duplicate(
+/// Check if a similar memory already exists (exact match or semantic similarity)
+async fn find_similar_memory(
     db: &Arc<Database>,
     project_id: &str,
     title: &str,
+    content: &str,
 ) -> Result<bool, String> {
     let project_id = project_id.to_string();
     let title = title.to_string();
+    let content = content.to_string();
 
     db.with_conn(move |conn| {
-        let count: i64 = conn
+        // Fast path: exact title match
+        let exact_count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM memories WHERE project_id = ? AND title = ?",
                 rusqlite::params![project_id, title],
@@ -180,7 +183,45 @@ async fn is_duplicate(
             )
             .map_err(|e| e.to_string())?;
 
-        Ok(count > 0)
+        if exact_count > 0 {
+            return Ok(true);
+        }
+
+        // Similarity check against recent memories
+        let mut stmt = conn
+            .prepare(
+                "SELECT title, content FROM memories
+                 WHERE project_id = ? AND state != 'removed'
+                 ORDER BY extracted_at DESC LIMIT 200",
+            )
+            .map_err(|e| e.to_string())?;
+
+        let existing: Vec<(String, String)> = stmt
+            .query_map(rusqlite::params![project_id], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        for (existing_title, existing_content) in &existing {
+            if super::similarity::is_similar_memory(
+                &title,
+                &content,
+                existing_title,
+                existing_content,
+                super::similarity::MEMORY_SIMILARITY_THRESHOLD,
+            ) {
+                tracing::debug!(
+                    "Similar memory found: \"{}\" ≈ \"{}\"",
+                    &title[..title.len().min(50)],
+                    &existing_title[..existing_title.len().min(50)]
+                );
+                return Ok(true);
+            }
+        }
+
+        Ok(false)
     })
     .await
 }
@@ -340,8 +381,8 @@ pub async fn extract_memories(
             continue;
         }
 
-        // Check for duplicates
-        match is_duplicate(db, &project_id, &memory.title).await {
+        // Check for duplicates (exact match + semantic similarity)
+        match find_similar_memory(db, &project_id, &memory.title, &memory.content).await {
             Ok(true) => {
                 skipped += 1;
                 continue;
