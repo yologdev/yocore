@@ -1584,7 +1584,6 @@ pub async fn delete_memory(
 /// Memory type count for statistics
 #[derive(Debug, serde::Serialize)]
 pub struct MemoryTypeCount {
-    #[serde(rename = "type")]
     pub memory_type: String,
     pub count: i64,
 }
