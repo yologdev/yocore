@@ -105,6 +105,9 @@ async fn main() -> anyhow::Result<()> {
         // Start periodic memory ranking background task
         core.start_periodic_ranking();
 
+        // Recover pending AI tasks (title, memory, skills) from previous sessions
+        core.recover_pending_ai_tasks().await;
+
         // Start API server (blocks until shutdown)
         core.start_api_server().await?;
     }

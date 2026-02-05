@@ -111,12 +111,106 @@ impl Core {
     pub async fn start_watching(&self) -> Result<()> {
         let handle = watcher::start_watcher(
             &self.config,
+            self.config_path.clone(),
             self.db.clone(),
             self.event_tx.clone(),
+            self.ai_event_tx.clone(),
+            self.ai_task_queue.clone(),
         )
         .await?;
         *self.watcher_handle.write().await = Some(handle);
         Ok(())
+    }
+
+    /// Recover pending AI tasks on startup
+    ///
+    /// Checks for sessions that need title generation, memory extraction, or skill extraction
+    /// and triggers them based on config feature flags.
+    pub async fn recover_pending_ai_tasks(&self) {
+        // Check if AI is enabled
+        if !self.config.ai.enabled || self.config.ai.provider.is_none() {
+            return;
+        }
+
+        let features = &self.config.ai.features;
+        let db = self.db.clone();
+
+        // Query pending sessions
+        let sessions = match db
+            .with_conn(|conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT s.id, s.message_count,
+                        (COALESCE(s.title_ai_generated, 0) = 0 AND COALESCE(s.title_edited, 0) = 0) as needs_title,
+                        (s.memories_extracted_at IS NULL) as needs_memory,
+                        (s.skills_extracted_at IS NULL) as needs_skills
+                    FROM sessions s
+                    INNER JOIN projects p ON s.project_id = p.id
+                    WHERE p.auto_sync = 1
+                      AND COALESCE(s.import_status, 'success') = 'success'
+                      AND s.message_count >= 25
+                      AND (
+                        (COALESCE(s.title_ai_generated, 0) = 0 AND COALESCE(s.title_edited, 0) = 0)
+                        OR s.memories_extracted_at IS NULL
+                        OR s.skills_extracted_at IS NULL
+                      )
+                    ORDER BY s.created_at DESC
+                    LIMIT 50",
+                )?;
+
+                let results: Vec<(String, usize, bool, bool, bool)> = stmt
+                    .query_map([], |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, usize>(1)?,
+                            row.get::<_, i32>(2)? != 0,
+                            row.get::<_, i32>(3)? != 0,
+                            row.get::<_, i32>(4)? != 0,
+                        ))
+                    })?
+                    .filter_map(|r| r.ok())
+                    .collect();
+
+                Ok::<_, rusqlite::Error>(results)
+            })
+            .await
+        {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!("Failed to query pending AI sessions: {}", e);
+                return;
+            }
+        };
+
+        if sessions.is_empty() {
+            return;
+        }
+
+        tracing::info!(
+            "AI recovery: found {} session(s) needing AI processing",
+            sessions.len()
+        );
+
+        let mut trigger = ai::AiAutoTrigger::new(
+            self.config_path.clone(),
+            self.db.clone(),
+            self.ai_event_tx.clone(),
+            self.ai_task_queue.clone(),
+        );
+
+        for (session_id, message_count, needs_title, needs_memory, needs_skills) in sessions {
+            let sid = &session_id[..8.min(session_id.len())];
+
+            if needs_title && features.title_generation {
+                tracing::info!("AI recovery: triggering title for {}", sid);
+                trigger.on_session_parsed(&session_id, message_count).await;
+            } else if needs_memory && features.memory_extraction {
+                tracing::info!("AI recovery: triggering memory extraction for {}", sid);
+                trigger.on_session_parsed(&session_id, message_count).await;
+            } else if needs_skills && features.skills_discovery {
+                tracing::info!("AI recovery: triggering skill extraction for {}", sid);
+                trigger.on_session_parsed(&session_id, message_count).await;
+            }
+        }
     }
 
     /// Stop the file watcher

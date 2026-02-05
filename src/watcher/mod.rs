@@ -3,6 +3,9 @@
 //! Watches configured directories for JSONL session files,
 //! parses them with the appropriate parser, and stores results in the database.
 
+use crate::ai::auto_trigger::AiAutoTrigger;
+use crate::ai::types::AiEvent;
+use crate::ai::AiTaskQueue;
 use crate::config::Config;
 use crate::db::Database;
 use crate::error::Result;
@@ -89,13 +92,18 @@ struct WatcherState {
     db: Arc<Database>,
     /// Broadcast event sender (for SSE)
     event_tx: broadcast::Sender<WatcherEvent>,
+    /// AI auto-trigger (triggers title/memory/skills after parsing)
+    ai_trigger: AiAutoTrigger,
 }
 
 /// Start watching configured paths for session files
 pub async fn start_watcher(
     config: &Config,
+    config_path: PathBuf,
     db: Arc<Database>,
     event_tx: broadcast::Sender<WatcherEvent>,
+    ai_event_tx: broadcast::Sender<AiEvent>,
+    ai_task_queue: AiTaskQueue,
 ) -> Result<WatcherHandle> {
     let (shutdown_tx, mut shutdown_rx) = mpsc::channel::<()>(1);
 
@@ -161,10 +169,18 @@ pub async fn start_watcher(
         );
     }
 
+    let ai_trigger = AiAutoTrigger::new(
+        config_path,
+        db.clone(),
+        ai_event_tx,
+        ai_task_queue,
+    );
+
     let state = Arc::new(tokio::sync::RwLock::new(WatcherState {
         watched,
         db,
         event_tx,
+        ai_trigger,
     }));
 
     // Create a channel to send events from notify thread to tokio runtime
@@ -353,7 +369,12 @@ async fn handle_file_event(state: &Arc<tokio::sync::RwLock<WatcherState>>, path:
             drop(state_guard);
 
             // Re-parse the file to update message count, duration, etc.
-            parse_session_file(&db, &event_tx, &path_str, &file_stem, &parser_type).await;
+            if let Some(message_count) =
+                parse_session_file(&db, &event_tx, &path_str, &file_stem, &parser_type).await
+            {
+                // Auto-trigger AI tasks after successful parse
+                state.write().await.ai_trigger.on_session_parsed(&file_stem, message_count).await;
+            }
             return; // Exit early since we dropped the lock
         }
     } else {
@@ -378,18 +399,24 @@ async fn handle_file_event(state: &Arc<tokio::sync::RwLock<WatcherState>>, path:
 
         // parse_session_file will emit SessionParsed if successful
         // NewSession event is not emitted here to avoid 404s for unregistered projects
-        parse_session_file(&db, &event_tx, &path_str, &file_stem, &parser_type).await;
+        if let Some(message_count) =
+            parse_session_file(&db, &event_tx, &path_str, &file_stem, &parser_type).await
+        {
+            // Auto-trigger AI tasks after successful parse
+            state.write().await.ai_trigger.on_session_parsed(&file_stem, message_count).await;
+        }
     }
 }
 
-/// Parse a session file and store in database
+/// Parse a session file, store in database, and return message count on success
+/// Returns Some(message_count) if session was stored, None otherwise
 async fn parse_session_file(
     db: &Arc<Database>,
     event_tx: &broadcast::Sender<WatcherEvent>,
     file_path: &str,
     session_id: &str,
     parser_type: &str,
-) {
+) -> Option<usize> {
     let path = PathBuf::from(file_path);
     let file_path_owned = file_path.to_string();
 
@@ -404,14 +431,14 @@ async fn parse_session_file(
                 file_path: file_path_owned,
                 error: format!("Failed to read file: {}", e),
             });
-            return;
+            return None;
         }
         Err(_) => {
             let _ = event_tx.send(WatcherEvent::Error {
                 file_path: file_path_owned,
                 error: "spawn_blocking task panicked".to_string(),
             });
-            return;
+            return None;
         }
     };
 
@@ -420,7 +447,7 @@ async fn parse_session_file(
         Some(p) => p,
         None => {
             tracing::warn!("Unknown parser type: {}", parser_type);
-            return;
+            return None;
         }
     };
 
@@ -441,10 +468,12 @@ async fn parse_session_file(
                 session_id: session_id.to_string(),
                 message_count,
             });
+            Some(message_count)
         }
         Ok(false) => {
             // Session was skipped (no matching project) - don't emit event
             tracing::debug!("Skipped session {} - no matching project", session_id);
+            None
         }
         Err(e) => {
             tracing::error!("Failed to store session {}: {}", session_id, e);
@@ -452,6 +481,7 @@ async fn parse_session_file(
                 file_path: file_path.to_string(),
                 error: format!("Failed to store session: {}", e),
             });
+            None
         }
     }
 }
