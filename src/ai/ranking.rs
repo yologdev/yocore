@@ -15,8 +15,10 @@ pub struct RankingConfig {
     pub high_threshold: f64,
     /// Minimum access count for promotion to high state
     pub min_access_for_high: i64,
-    /// Score threshold below which memories are demoted
-    pub low_threshold: f64,
+    /// Score threshold below which memories are demoted to low
+    pub demotion_threshold: f64,
+    /// Score threshold below which memories can be removed
+    pub removal_threshold: f64,
     /// Days without access before considering memory stale
     pub stale_days: i64,
     /// Days before new low-score memories can be demoted
@@ -30,10 +32,11 @@ impl Default for RankingConfig {
         RankingConfig {
             high_threshold: 0.7,
             min_access_for_high: 3,
-            low_threshold: 0.3,
+            demotion_threshold: 0.4,  // Moderate: demote below 0.4
+            removal_threshold: 0.3,   // Moderate: remove below 0.3
             stale_days: 90,
-            demotion_age_days: 30,
-            removal_age_days: 60,
+            demotion_age_days: 14,    // Moderate: demote after 14 days
+            removal_age_days: 30,     // Moderate: remove after 30 days
         }
     }
 }
@@ -144,8 +147,25 @@ fn determine_transition(
                     ),
                 });
             }
+            // Remove if very low score, old enough, and never accessed
+            // Check removal BEFORE demotion (removal is more severe)
+            if score < config.removal_threshold
+                && age_days > config.removal_age_days
+                && memory.access_count == 0
+            {
+                return Some(StateTransition {
+                    memory_id: memory.id,
+                    from_state: "new".to_string(),
+                    to_state: "removed".to_string(),
+                    score,
+                    reason: format!(
+                        "Score {:.2} < {:.2} after {} days with 0 accesses",
+                        score, config.removal_threshold, age_days
+                    ),
+                });
+            }
             // Demote to low if score is poor and old enough
-            if score < config.low_threshold && age_days > config.demotion_age_days {
+            if score < config.demotion_threshold && age_days > config.demotion_age_days {
                 return Some(StateTransition {
                     memory_id: memory.id,
                     from_state: "new".to_string(),
@@ -153,20 +173,7 @@ fn determine_transition(
                     score,
                     reason: format!(
                         "Score {:.2} < {:.2} after {} days",
-                        score, config.low_threshold, age_days
-                    ),
-                });
-            }
-            // Remove if very low score, old, and never accessed
-            if score < 0.2 && age_days > config.removal_age_days && memory.access_count == 0 {
-                return Some(StateTransition {
-                    memory_id: memory.id,
-                    from_state: "new".to_string(),
-                    to_state: "removed".to_string(),
-                    score,
-                    reason: format!(
-                        "Score {:.2} < 0.2 after {} days with 0 accesses",
-                        score, age_days
+                        score, config.demotion_threshold, age_days
                     ),
                 });
             }
@@ -188,7 +195,7 @@ fn determine_transition(
         }
         "high" => {
             // Demote if stale and not validated
-            if score < config.low_threshold
+            if score < config.demotion_threshold
                 && stale_days > config.stale_days
                 && !memory.is_validated
             {
