@@ -148,4 +148,135 @@ impl Core {
     pub fn database(&self) -> &Arc<Database> {
         &self.db
     }
+
+    /// Start periodic memory ranking background task
+    ///
+    /// This spawns a background task that runs memory ranking on all projects
+    /// at the configured interval (default: every 6 hours).
+    pub fn start_periodic_ranking(&self) {
+        let ranking_config = &self.config.ai.features.ranking;
+
+        if !ranking_config.enabled {
+            tracing::info!("Memory ranking is disabled");
+            return;
+        }
+
+        let interval_hours = ranking_config.interval_hours;
+        let batch_size = ranking_config.batch_size;
+        let db = self.db.clone();
+        let event_tx = self.event_tx.clone();
+
+        tracing::info!(
+            "Starting periodic memory ranking (every {} hours, batch size {})",
+            interval_hours,
+            batch_size
+        );
+
+        tokio::spawn(async move {
+            use std::time::Duration;
+
+            let interval = Duration::from_secs(interval_hours as u64 * 3600);
+            let mut ticker = tokio::time::interval(interval);
+
+            // Skip the first immediate tick
+            ticker.tick().await;
+
+            loop {
+                ticker.tick().await;
+                tracing::info!("Running periodic memory ranking sweep");
+
+                // Get all project IDs using spawn_blocking to avoid blocking async runtime
+                let db_clone = db.clone();
+                let project_ids: Vec<String> =
+                    match tokio::task::spawn_blocking(move || {
+                        let conn = db_clone.conn();
+                        conn.prepare("SELECT id FROM projects")
+                            .and_then(|mut stmt| {
+                                stmt.query_map([], |row| row.get(0))
+                                    .map(|rows| rows.filter_map(|r| r.ok()).collect())
+                            })
+                            .unwrap_or_default()
+                    })
+                    .await
+                    {
+                        Ok(ids) => ids,
+                        Err(e) => {
+                            tracing::error!("Failed to get project IDs: {}", e);
+                            continue;
+                        }
+                    };
+
+                for project_id in project_ids {
+                    // Emit start event
+                    let _ = event_tx.send(watcher::WatcherEvent::RankingStart {
+                        project_id: project_id.clone(),
+                    });
+
+                    // Run ranking in spawn_blocking with timeout
+                    let db_clone = db.clone();
+                    let pid = project_id.clone();
+                    let ranking_future = tokio::task::spawn_blocking(move || {
+                        ai::ranking::rank_project_memories(&db_clone, &pid, batch_size)
+                    });
+
+                    // Timeout after 60 seconds per project
+                    let result = tokio::time::timeout(Duration::from_secs(60), ranking_future).await;
+
+                    match result {
+                        Ok(Ok(Ok(ranking_result))) => {
+                            if ranking_result.memories_evaluated > 0 {
+                                tracing::info!(
+                                    "Ranked project {}: {} evaluated, {} promoted, {} demoted, {} removed",
+                                    project_id,
+                                    ranking_result.memories_evaluated,
+                                    ranking_result.promoted,
+                                    ranking_result.demoted,
+                                    ranking_result.removed
+                                );
+                            }
+
+                            // Emit complete event
+                            let _ = event_tx.send(watcher::WatcherEvent::RankingComplete {
+                                project_id: project_id.clone(),
+                                promoted: ranking_result.promoted,
+                                demoted: ranking_result.demoted,
+                                removed: ranking_result.removed,
+                            });
+                        }
+                        Ok(Ok(Err(e))) => {
+                            tracing::error!("Failed to rank project {}: {}", project_id, e);
+                            let _ = event_tx.send(watcher::WatcherEvent::RankingError {
+                                project_id: project_id.clone(),
+                                error: e,
+                            });
+                        }
+                        Ok(Err(e)) => {
+                            tracing::error!("Ranking task panicked for project {}: {}", project_id, e);
+                            let _ = event_tx.send(watcher::WatcherEvent::RankingError {
+                                project_id: project_id.clone(),
+                                error: format!("Task panicked: {}", e),
+                            });
+                        }
+                        Err(_) => {
+                            tracing::error!("Ranking timed out for project {}", project_id);
+                            let _ = event_tx.send(watcher::WatcherEvent::RankingError {
+                                project_id: project_id.clone(),
+                                error: "Ranking timed out after 60 seconds".to_string(),
+                            });
+                        }
+                    }
+
+                    // Yield to other tasks between projects
+                    tokio::task::yield_now().await;
+                }
+
+                tracing::info!("Periodic memory ranking sweep complete");
+            }
+        });
+    }
+
+    /// Get the event sender for broadcasting events
+    pub fn event_sender(&self) -> broadcast::Sender<watcher::WatcherEvent> {
+        self.event_tx.clone()
+    }
 }

@@ -133,6 +133,44 @@ pub struct AiFeatures {
     /// Extract memories from sessions
     #[serde(default = "default_true")]
     pub memory_extraction: bool,
+
+    /// Memory ranking configuration
+    #[serde(default)]
+    pub ranking: RankingConfig,
+}
+
+/// Memory ranking configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RankingConfig {
+    /// Whether automatic memory ranking is enabled
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    /// Interval in hours between periodic ranking sweeps
+    #[serde(default = "default_ranking_interval")]
+    pub interval_hours: u32,
+
+    /// Number of memories to process per batch
+    #[serde(default = "default_batch_size")]
+    pub batch_size: usize,
+}
+
+fn default_ranking_interval() -> u32 {
+    6 // Every 6 hours
+}
+
+fn default_batch_size() -> usize {
+    500
+}
+
+impl Default for RankingConfig {
+    fn default() -> Self {
+        RankingConfig {
+            enabled: true,
+            interval_hours: default_ranking_interval(),
+            batch_size: default_batch_size(),
+        }
+    }
 }
 
 impl Default for AiFeatures {
@@ -141,6 +179,7 @@ impl Default for AiFeatures {
             title_generation: true,
             skills_discovery: true,
             memory_extraction: true,
+            ranking: RankingConfig::default(),
         }
     }
 }
@@ -261,6 +300,11 @@ enabled = false
 title_generation = true
 skills_discovery = true
 memory_extraction = true
+
+[ai.features.ranking]
+enabled = true
+interval_hours = 6
+batch_size = 500
 "#;
 
         let path = path.as_ref();

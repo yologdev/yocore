@@ -111,6 +111,15 @@ fn create_router(state: AppState) -> Router {
         .route("/ai/sessions/:id/skills", post(routes::trigger_skill_extraction))
         .route("/ai/sessions/:id/markers", post(routes::trigger_marker_detection))
         .route("/ai/cli/status", get(routes::get_ai_cli_status))
+        // Memory Ranking
+        .route(
+            "/projects/:id/rank-memories",
+            post(routes::rank_project_memories),
+        )
+        .route(
+            "/projects/:id/ranking-stats",
+            get(routes::get_ranking_stats),
+        )
         // Server-Sent Events
         .route("/events", get(sse::events_handler))
         // Apply auth middleware to all API routes
