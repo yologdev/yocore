@@ -1201,6 +1201,295 @@ pub async fn search_session(
 }
 
 // ============================================================================
+// Session Streaming (Phase 3.2)
+// ============================================================================
+
+#[derive(Debug, Deserialize)]
+pub struct ReadBytesQuery {
+    pub offset: Option<i64>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct SessionByteLine {
+    pub content: String,
+    pub byte_offset: i64,
+    pub byte_length: i64,
+    pub line_number: i64,
+}
+
+/// Read session bytes from file starting at offset
+pub async fn read_session_bytes(
+    State(state): State<AppState>,
+    Path(session_id): Path<String>,
+    Query(query): Query<ReadBytesQuery>,
+) -> impl IntoResponse {
+    let offset = query.offset.unwrap_or(0);
+
+    // Get file path from session
+    let file_path_result = state
+        .db
+        .with_conn(move |conn| {
+            conn.query_row(
+                "SELECT file_path FROM sessions WHERE id = ?",
+                [&session_id],
+                |row| row.get::<_, String>(0),
+            )
+        })
+        .await;
+
+    let file_path = match file_path_result {
+        Ok(p) => p,
+        Err(_) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": "Session not found" })),
+            )
+                .into_response();
+        }
+    };
+
+    // Read file and get lines from offset
+    let path = std::path::PathBuf::from(&file_path);
+    let read_result = tokio::task::spawn_blocking(move || {
+        use std::io::{BufRead, Seek, SeekFrom};
+        let file = std::fs::File::open(&path)?;
+        let file_size = file.metadata()?.len() as i64;
+        let mut reader = std::io::BufReader::new(file);
+
+        if offset > 0 {
+            reader.seek(SeekFrom::Start(offset as u64))?;
+        }
+
+        let mut lines = Vec::new();
+        let mut current_offset = offset;
+        let mut line_number = 1i64;
+
+        for line_result in reader.lines() {
+            let line = line_result?;
+            let byte_length = line.len() as i64 + 1; // +1 for newline
+            lines.push(SessionByteLine {
+                content: line,
+                byte_offset: current_offset,
+                byte_length,
+                line_number,
+            });
+            current_offset += byte_length;
+            line_number += 1;
+        }
+
+        Ok::<_, std::io::Error>((lines, file_size))
+    })
+    .await;
+
+    match read_result {
+        Ok(Ok((lines, file_size))) => Json(serde_json::json!({
+            "lines": lines,
+            "file_size": file_size
+        }))
+        .into_response(),
+        _ => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "Failed to read session file" })),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ParsedMessageInput {
+    pub role: String,
+    pub content_preview: Option<String>,
+    pub search_content: Option<String>,
+    pub has_code: bool,
+    pub has_error: bool,
+    pub has_file_changes: bool,
+    pub tool_name: Option<String>,
+    pub tool_type: Option<String>,
+    pub tool_summary: Option<String>,
+    pub byte_offset: i64,
+    pub byte_length: i64,
+    pub input_tokens: Option<i64>,
+    pub output_tokens: Option<i64>,
+    pub cache_read_tokens: Option<i64>,
+    pub cache_creation_tokens: Option<i64>,
+    pub model: Option<String>,
+    pub timestamp: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AppendMessagesRequest {
+    pub messages: Vec<ParsedMessageInput>,
+    pub new_file_size: i64,
+    pub new_file_modified: String,
+}
+
+/// Append messages to a session (incremental update)
+pub async fn append_session_messages(
+    State(state): State<AppState>,
+    Path(session_id): Path<String>,
+    Json(req): Json<AppendMessagesRequest>,
+) -> impl IntoResponse {
+    let result = state
+        .db
+        .with_conn(move |conn| {
+            // Get current max sequence_num
+            let max_seq: i64 = conn
+                .query_row(
+                    "SELECT COALESCE(MAX(sequence_num), 0) FROM session_messages WHERE session_id = ?",
+                    [&session_id],
+                    |row| row.get(0),
+                )
+                .unwrap_or(0);
+
+            // Insert new messages
+            let mut inserted = Vec::new();
+            for (i, msg) in req.messages.iter().enumerate() {
+                let seq = max_seq + 1 + i as i64;
+                conn.execute(
+                    "INSERT INTO session_messages (
+                        session_id, sequence_num, role, content_preview, search_content,
+                        has_code, has_error, has_file_changes, tool_name, tool_type, tool_summary,
+                        byte_offset, byte_length, input_tokens, output_tokens,
+                        cache_read_tokens, cache_creation_tokens, model, timestamp
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    rusqlite::params![
+                        session_id, seq, msg.role, msg.content_preview, msg.search_content,
+                        msg.has_code, msg.has_error, msg.has_file_changes,
+                        msg.tool_name, msg.tool_type, msg.tool_summary,
+                        msg.byte_offset, msg.byte_length, msg.input_tokens, msg.output_tokens,
+                        msg.cache_read_tokens, msg.cache_creation_tokens, msg.model, msg.timestamp
+                    ],
+                )?;
+                inserted.push(serde_json::json!({
+                    "sequence_num": seq,
+                    "role": msg.role,
+                }));
+            }
+
+            // Update session file info
+            conn.execute(
+                "UPDATE sessions SET
+                    file_size = ?, file_modified = ?, message_count = message_count + ?
+                 WHERE id = ?",
+                rusqlite::params![req.new_file_size, req.new_file_modified, req.messages.len() as i64, session_id],
+            )?;
+
+            let total: i64 = conn
+                .query_row(
+                    "SELECT message_count FROM sessions WHERE id = ?",
+                    [&session_id],
+                    |row| row.get(0),
+                )
+                .unwrap_or(0);
+
+            Ok::<_, rusqlite::Error>((inserted, total, session_id))
+        })
+        .await;
+
+    match result {
+        Ok((messages, total_count, sid)) => Json(serde_json::json!({
+            "messages": messages,
+            "total_count": total_count,
+            "session_id": sid
+        }))
+        .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateAgentSummaryRequest {
+    pub agent_file_path: String,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cache_read_tokens: i64,
+    pub cache_creation_tokens: i64,
+    pub model: Option<String>,
+}
+
+/// Update or insert agent token summary for a session
+pub async fn update_agent_summary(
+    State(state): State<AppState>,
+    Path(session_id): Path<String>,
+    Json(req): Json<UpdateAgentSummaryRequest>,
+) -> impl IntoResponse {
+    let result = state
+        .db
+        .with_conn(move |conn| {
+            // Check if agent summary message already exists
+            let existing: Option<i64> = conn
+                .query_row(
+                    "SELECT id FROM session_messages
+                     WHERE session_id = ? AND tool_name = 'agent_summary' AND tool_summary = ?",
+                    rusqlite::params![session_id, req.agent_file_path],
+                    |row| row.get(0),
+                )
+                .ok();
+
+            if let Some(id) = existing {
+                // Update existing
+                conn.execute(
+                    "UPDATE session_messages SET
+                        input_tokens = ?, output_tokens = ?,
+                        cache_read_tokens = ?, cache_creation_tokens = ?, model = ?
+                     WHERE id = ?",
+                    rusqlite::params![
+                        req.input_tokens, req.output_tokens,
+                        req.cache_read_tokens, req.cache_creation_tokens, req.model, id
+                    ],
+                )?;
+                Ok::<_, rusqlite::Error>(("updated", id, session_id, None::<i64>))
+            } else {
+                // Insert new
+                let max_seq: i64 = conn
+                    .query_row(
+                        "SELECT COALESCE(MAX(sequence_num), 0) FROM session_messages WHERE session_id = ?",
+                        [&session_id],
+                        |row| row.get(0),
+                    )
+                    .unwrap_or(0);
+                let seq = max_seq + 1;
+                let now = chrono::Utc::now().to_rfc3339();
+
+                conn.execute(
+                    "INSERT INTO session_messages (
+                        session_id, sequence_num, role, tool_name, tool_summary,
+                        input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
+                        model, timestamp, has_code, has_error, has_file_changes, byte_offset, byte_length
+                    ) VALUES (?, ?, 'assistant', 'agent_summary', ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, 0)",
+                    rusqlite::params![
+                        session_id, seq, req.agent_file_path,
+                        req.input_tokens, req.output_tokens,
+                        req.cache_read_tokens, req.cache_creation_tokens, req.model, now
+                    ],
+                )?;
+                let id = conn.last_insert_rowid();
+                Ok(("created", id, session_id, Some(seq)))
+            }
+        })
+        .await;
+
+    match result {
+        Ok((action, id, sid, seq)) => Json(serde_json::json!({
+            "action": action,
+            "id": id,
+            "session_id": sid,
+            "sequence_num": seq
+        }))
+        .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+// ============================================================================
 // Memories
 // ============================================================================
 

@@ -97,6 +97,10 @@ fn create_router(state: AppState) -> Router {
         )
         .route("/sessions/:id/markers", get(routes::get_session_markers))
         .route("/sessions/:id/search", get(routes::search_session))
+        // Session Streaming
+        .route("/sessions/:id/bytes", get(routes::read_session_bytes))
+        .route("/sessions/:id/messages/append", post(routes::append_session_messages))
+        .route("/sessions/:id/agent-summary", post(routes::update_agent_summary))
         // Search
         .route("/search", post(routes::search))
         // Memories
