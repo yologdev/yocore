@@ -1852,6 +1852,130 @@ pub async fn accept_ai_privacy(State(state): State<AppState>) -> impl IntoRespon
     }
 }
 
+// ============================================================================
+// AI Export
+// ============================================================================
+
+/// Provider capabilities for export decisions
+#[derive(Debug, serde::Serialize)]
+pub struct ProviderCapabilities {
+    pub max_content_size: usize,
+    pub timeout_secs: u64,
+    pub supports_chunking: bool,
+}
+
+/// Get AI export capabilities
+pub async fn get_ai_export_capabilities() -> impl IntoResponse {
+    // Return capabilities for Claude Code as default provider
+    Json(ProviderCapabilities {
+        max_content_size: 100_000,
+        timeout_secs: 120,
+        supports_chunking: true,
+    })
+}
+
+#[derive(Debug, Deserialize)]
+pub struct GenerateExportRequest {
+    pub format: String,
+    pub raw_content: String,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct ExportResult {
+    pub content: String,
+    pub format: String,
+    pub provider: String,
+    pub generation_time_ms: u64,
+}
+
+/// Generate AI export (stub - returns raw content for now)
+pub async fn generate_ai_export(Json(req): Json<GenerateExportRequest>) -> impl IntoResponse {
+    // For now, just return the raw content
+    // Full implementation would use Claude Code to summarize
+    Json(ExportResult {
+        content: req.raw_content,
+        format: req.format,
+        provider: "passthrough".to_string(),
+        generation_time_ms: 0,
+    })
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ChunkRequest {
+    pub format: String,
+    pub chunk_content: String,
+    pub chunk_index: usize,
+    pub total_chunks: usize,
+    pub is_first: bool,
+    pub is_last: bool,
+    pub target_output_chars: usize,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct ChunkResult {
+    pub content: String,
+    pub chunk_index: usize,
+    pub provider: String,
+    pub generation_time_ms: u64,
+}
+
+/// Process AI export chunk (stub)
+pub async fn process_ai_export_chunk(Json(req): Json<ChunkRequest>) -> impl IntoResponse {
+    Json(ChunkResult {
+        content: req.chunk_content,
+        chunk_index: req.chunk_index,
+        provider: "passthrough".to_string(),
+        generation_time_ms: 0,
+    })
+}
+
+#[derive(Debug, Deserialize)]
+pub struct MergeRequest {
+    pub format: String,
+    pub partial_results: Vec<String>,
+}
+
+/// Merge AI export chunks (stub)
+pub async fn merge_ai_export_chunks(Json(req): Json<MergeRequest>) -> impl IntoResponse {
+    Json(ExportResult {
+        content: req.partial_results.join("\n\n"),
+        format: req.format,
+        provider: "passthrough".to_string(),
+        generation_time_ms: 0,
+    })
+}
+
+// ============================================================================
+// Session Limit
+// ============================================================================
+
+#[derive(Debug, serde::Serialize)]
+pub struct SessionLimitInfo {
+    pub count: i64,
+    pub limit: i64,
+    pub remaining: i64,
+    pub at_limit: bool,
+}
+
+/// Get session limit info (all features now free - unlimited)
+pub async fn get_session_limit_info(State(state): State<AppState>) -> impl IntoResponse {
+    let count = state
+        .db
+        .with_conn(|conn| {
+            conn.query_row("SELECT COUNT(*) FROM sessions", [], |row| row.get::<_, i64>(0))
+        })
+        .await
+        .unwrap_or(0);
+
+    // Unlimited sessions
+    Json(SessionLimitInfo {
+        count,
+        limit: -1, // -1 means unlimited
+        remaining: -1,
+        at_limit: false,
+    })
+}
+
 #[derive(Debug, Deserialize)]
 pub struct TitleGenerationRequest {
     #[serde(default)]

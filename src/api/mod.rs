@@ -120,6 +120,13 @@ fn create_router(state: AppState) -> Router {
         .route("/ai/settings", get(routes::get_ai_settings))
         .route("/ai/settings", patch(routes::update_ai_settings))
         .route("/ai/privacy/accept", post(routes::accept_ai_privacy))
+        // AI Export
+        .route("/ai/export/capabilities", get(routes::get_ai_export_capabilities))
+        .route("/ai/export/generate", post(routes::generate_ai_export))
+        .route("/ai/export/chunk", post(routes::process_ai_export_chunk))
+        .route("/ai/export/merge", post(routes::merge_ai_export_chunks))
+        // Session Limit
+        .route("/sessions/limit", get(routes::get_session_limit_info))
         // Memory Ranking
         .route(
             "/projects/:id/rank-memories",
