@@ -311,32 +311,48 @@ async fn handle_file_event(state: &Arc<tokio::sync::RwLock<WatcherState>>, path:
             // File grew - update tracking
             tracked.last_known_size = new_size;
 
-            // Note: We always emit SessionChanged and parse the file.
-            // If no project is registered for this folder, store_session will skip it.
-            // This allows sessions to be processed once the project is registered.
-
-            let event = WatcherEvent::SessionChanged {
-                session_id: file_stem.clone(),
-                file_path: path_str.clone(),
-                previous_size,
-                new_size,
-            };
-
-            let _ = state_guard.event_tx.send(event);
-            tracing::debug!(
-                "Session file changed: {} ({} -> {} bytes)",
-                file_stem,
-                previous_size,
-                new_size
-            );
-
-            // Re-parse the file to update message count, duration, etc.
+            // Check if session exists in DB before emitting event
+            // This prevents 404 errors when Desktop tries to fetch unregistered sessions
             let db = Arc::clone(&state_guard.db);
             let event_tx = state_guard.event_tx.clone();
+            let session_id_check = file_stem.clone();
+
+            let session_exists = db
+                .with_conn(move |conn| {
+                    conn.query_row(
+                        "SELECT 1 FROM sessions WHERE id = ?",
+                        [&session_id_check],
+                        |_| Ok(true),
+                    )
+                    .unwrap_or(false)
+                })
+                .await;
+
+            if session_exists {
+                let event = WatcherEvent::SessionChanged {
+                    session_id: file_stem.clone(),
+                    file_path: path_str.clone(),
+                    previous_size,
+                    new_size,
+                };
+                let _ = event_tx.send(event);
+                tracing::debug!(
+                    "Session file changed: {} ({} -> {} bytes)",
+                    file_stem,
+                    previous_size,
+                    new_size
+                );
+            } else {
+                tracing::debug!(
+                    "Skipping SessionChanged for unregistered session: {}",
+                    file_stem
+                );
+            }
 
             // Drop the lock before parsing
             drop(state_guard);
 
+            // Re-parse the file to update message count, duration, etc.
             parse_session_file(&db, &event_tx, &path_str, &file_stem, &parser_type).await;
             return; // Exit early since we dropped the lock
         }
@@ -350,26 +366,18 @@ async fn handle_file_event(state: &Arc<tokio::sync::RwLock<WatcherState>>, path:
             },
         );
 
-        // Note: We always process new files. If no project is registered for this
-        // folder, store_session will skip it. This allows sessions to be processed
-        // once the project is registered.
-
-        let event = WatcherEvent::NewSession {
-            project_id: project_id.clone(),
-            file_path: path_str.clone(),
-            file_name: file_name.clone(),
-        };
-
-        let _ = state_guard.event_tx.send(event);
-        tracing::info!("New session detected: {} in {}", file_name, project_id);
-
-        // Parse the new file
+        // Parse the new file first, then emit NewSession only if it was stored
+        // This prevents 404 errors when Desktop tries to fetch unregistered sessions
         let db = Arc::clone(&state_guard.db);
         let event_tx = state_guard.event_tx.clone();
 
         // Drop the lock before parsing
         drop(state_guard);
 
+        tracing::debug!("New session file detected: {} in {}", file_name, project_id);
+
+        // parse_session_file will emit SessionParsed if successful
+        // NewSession event is not emitted here to avoid 404s for unregistered projects
         parse_session_file(&db, &event_tx, &path_str, &file_stem, &parser_type).await;
     }
 }
