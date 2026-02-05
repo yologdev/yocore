@@ -276,11 +276,49 @@ async fn store_skill(
 }
 
 /// Extract skills from a session
+/// If `force` is false and the session has already been extracted, returns early with 0 extracted
 pub async fn extract_skills(
     db: &Arc<Database>,
     session_id: &str,
     cli: Option<DetectedCli>,
+    force: bool,
 ) -> SkillExtractionResult {
+    // Check if already extracted and no significant new content (unless force)
+    if !force {
+        let session_id_check = session_id.to_string();
+        let should_skip = db
+            .with_conn(move |conn| {
+                // Get current message count and last extracted count
+                conn.query_row(
+                    "SELECT message_count, COALESCE(skills_extracted_count, 0) as extracted_count, skills_extracted_at
+                     FROM sessions WHERE id = ?",
+                    [&session_id_check],
+                    |row| {
+                        let current_count: i64 = row.get(0)?;
+                        let extracted_count: i64 = row.get(1)?;
+                        let extracted_at: Option<String> = row.get(2)?;
+
+                        // Skip if already extracted AND no significant new messages (< 25 new)
+                        let new_messages = current_count - extracted_count;
+                        let should_skip = extracted_at.is_some() && new_messages < MIN_MESSAGES_FOR_EXTRACTION as i64;
+                        Ok(should_skip)
+                    },
+                )
+                .unwrap_or(false)
+            })
+            .await;
+
+        if should_skip {
+            tracing::debug!("Session {} already extracted with no significant new content, skipping", session_id);
+            return SkillExtractionResult {
+                session_id: session_id.to_string(),
+                skills_extracted: 0,
+                duplicates_found: 0,
+                error: None,
+            };
+        }
+    }
+
     // Detect CLI if not provided
     let cli = match cli {
         Some(c) => c,
@@ -374,6 +412,26 @@ pub async fn extract_skills(
             }
         }
     }
+
+    // Update session extraction state - store message_count at extraction time for delta tracking
+    let session_id_update = session_id.to_string();
+    let _ = db
+        .with_conn(move |conn| {
+            // Get current message count and store it as the extraction baseline
+            let current_message_count: i64 = conn
+                .query_row(
+                    "SELECT message_count FROM sessions WHERE id = ?",
+                    [&session_id_update],
+                    |row| row.get(0),
+                )
+                .unwrap_or(0);
+
+            conn.execute(
+                "UPDATE sessions SET skills_extracted_at = datetime('now'), skills_extracted_count = ? WHERE id = ?",
+                rusqlite::params![current_message_count, &session_id_update],
+            )
+        })
+        .await;
 
     SkillExtractionResult {
         session_id: session_id.to_string(),

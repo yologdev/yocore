@@ -2548,7 +2548,7 @@ pub async fn trigger_memory_extraction(
     Path(session_id): Path<String>,
     body: Option<Json<MemoryExtractionRequest>>,
 ) -> impl IntoResponse {
-    let _force = body.map(|b| b.force).unwrap_or(false);
+    let force = body.map(|b| b.force).unwrap_or(false);
 
     // Verify session exists
     let session_id_clone = session_id.clone();
@@ -2608,8 +2608,8 @@ pub async fn trigger_memory_extraction(
             session_id: session_id_for_task.clone(),
         });
 
-        // Extract memories
-        let result = crate::ai::extract_memories(&db, &session_id_for_task, None).await;
+        // Extract memories (skip if already extracted unless force=true)
+        let result = crate::ai::extract_memories(&db, &session_id_for_task, None, force).await;
 
         // Emit completion or error event
         if let Some(error) = result.error {
@@ -2649,7 +2649,7 @@ pub async fn trigger_skill_extraction(
     Path(session_id): Path<String>,
     body: Option<Json<SkillExtractionRequest>>,
 ) -> impl IntoResponse {
-    let _force = body.map(|b| b.force).unwrap_or(false);
+    let force = body.map(|b| b.force).unwrap_or(false);
 
     // Verify session exists
     let session_id_clone = session_id.clone();
@@ -2709,8 +2709,8 @@ pub async fn trigger_skill_extraction(
             session_id: session_id_for_task.clone(),
         });
 
-        // Extract skills
-        let result = crate::ai::extract_skills(&db, &session_id_for_task, None).await;
+        // Extract skills (skip if already extracted unless force=true)
+        let result = crate::ai::extract_skills(&db, &session_id_for_task, None, force).await;
 
         // Emit completion or error event
         if let Some(error) = result.error {
