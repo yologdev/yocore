@@ -311,11 +311,9 @@ async fn handle_file_event(state: &Arc<tokio::sync::RwLock<WatcherState>>, path:
             // File grew - update tracking
             tracked.last_known_size = new_size;
 
-            // Skip events and parsing for untracked watch directories
-            if project_id.starts_with("watch_") {
-                tracing::debug!("Skipping untracked session change: {}", file_stem);
-                return;
-            }
+            // Note: We always emit SessionChanged and parse the file.
+            // If no project is registered for this folder, store_session will skip it.
+            // This allows sessions to be processed once the project is registered.
 
             let event = WatcherEvent::SessionChanged {
                 session_id: file_stem.clone(),
@@ -352,13 +350,9 @@ async fn handle_file_event(state: &Arc<tokio::sync::RwLock<WatcherState>>, path:
             },
         );
 
-        // Skip emitting events and parsing for untracked watch directories
-        // These are temporary/system sessions not associated with registered projects
-        if project_id.starts_with("watch_") {
-            tracing::debug!("Skipping untracked session: {} in {}", file_name, project_id);
-            drop(state_guard);
-            return;
-        }
+        // Note: We always process new files. If no project is registered for this
+        // folder, store_session will skip it. This allows sessions to be processed
+        // once the project is registered.
 
         let event = WatcherEvent::NewSession {
             project_id: project_id.clone(),
