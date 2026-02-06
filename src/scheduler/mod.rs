@@ -129,6 +129,30 @@ impl ScheduledTask {
     }
 }
 
+/// Start a periodic WAL checkpoint task.
+///
+/// SQLite's `wal_autocheckpoint` can fail to trigger under high write contention
+/// (single Mutex connection). This safety net runs every 5 minutes to force a
+/// checkpoint, preventing the WAL from growing unbounded.
+fn start_wal_checkpoint_task(db: Arc<Database>) {
+    tokio::spawn(async move {
+        let interval = Duration::from_secs(300); // 5 minutes
+        let mut ticker = tokio::time::interval(interval);
+        ticker.tick().await; // Skip immediate tick
+
+        loop {
+            ticker.tick().await;
+            let result = db
+                .with_conn(|conn| conn.execute("PRAGMA wal_checkpoint(PASSIVE)", []))
+                .await;
+            match result {
+                Ok(_) => tracing::debug!("WAL checkpoint completed"),
+                Err(e) => tracing::warn!("WAL checkpoint failed: {}", e),
+            }
+        }
+    });
+}
+
 /// Start all enabled periodic tasks.
 ///
 /// Each task declares its feature dependencies (AI, memory_extraction, etc.).
@@ -141,6 +165,9 @@ pub fn start_scheduler(
     db: Arc<Database>,
     event_tx: broadcast::Sender<WatcherEvent>,
 ) {
+    // Always run WAL checkpoint regardless of AI settings
+    start_wal_checkpoint_task(db.clone());
+
     let all_tasks = [
         ScheduledTask::Ranking,
         ScheduledTask::DuplicateCleanup,

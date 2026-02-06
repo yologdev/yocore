@@ -39,6 +39,12 @@ impl Database {
         // Use query_row since PRAGMA journal_mode returns a result
         let _: String = conn.query_row("PRAGMA journal_mode = WAL", [], |row| row.get(0))?;
 
+        // Prevent WAL file from growing unbounded
+        // Autocheckpoint every 100 pages (~400KB) instead of default 1000
+        let _: i64 = conn.query_row("PRAGMA wal_autocheckpoint = 100", [], |row| row.get(0))?;
+        // Cap WAL file at 200MB — forces checkpoint even under heavy write load
+        let _: i64 = conn.query_row("PRAGMA journal_size_limit = 209715200", [], |row| row.get(0))?;
+
         // Initialize schema
         schema::init_db(&conn)?;
 
