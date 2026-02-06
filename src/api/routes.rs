@@ -1838,6 +1838,16 @@ pub async fn search_memories(
 
     match result {
         Ok(Ok(memories)) => {
+            // Track access for returned memories (feeds into ranking)
+            if !memories.is_empty() {
+                let memory_ids: Vec<i64> = memories.iter().map(|m| m.id).collect();
+                let db = state.db.clone();
+                let _ = tokio::task::spawn_blocking(move || {
+                    let mcp_db = crate::mcp::db::McpDb::new(db);
+                    let _ = mcp_db.track_memory_access(&memory_ids);
+                });
+            }
+
             let json_memories: Vec<serde_json::Value> = memories
                 .into_iter()
                 .map(memory_to_api_json)

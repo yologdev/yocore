@@ -283,6 +283,14 @@ pub async fn get_project_context(
         let tasks = mcp_db.get_memories_by_type(&project.id, MemoryType::Task, 5).unwrap_or_default();
 
         let total = decisions.len() + facts.len() + preferences.len() + context_memories.len() + tasks.len();
+
+        // Track access for all returned memories (feeds into ranking)
+        let all_ids: Vec<i64> = [&decisions, &facts, &preferences, &context_memories, &tasks]
+            .iter().flat_map(|v| v.iter().map(|m| m.id)).collect();
+        if !all_ids.is_empty() {
+            let _ = mcp_db.track_memory_access(&all_ids);
+        }
+
         let formatted = format_project_context(
             &project.name, &decisions, &facts, &preferences, &context_memories, &tasks, total,
         );
@@ -541,6 +549,12 @@ pub async fn search_context(
         } else {
             results.into_iter().take(req.limit).collect()
         };
+
+        // Track access for returned memories (feeds into ranking)
+        let memory_ids: Vec<i64> = filtered.iter().map(|m| m.id).collect();
+        if !memory_ids.is_empty() {
+            let _ = mcp_db.track_memory_access(&memory_ids);
+        }
 
         let query_opt = if query_str.is_empty() { None } else { Some(query_str) };
         let formatted = format_search_results(&project.name, query_opt, &filtered);

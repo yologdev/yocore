@@ -276,6 +276,12 @@ fn handle_search_memories(arguments: Value, db: &McpDb) -> ToolCallResult {
         results.into_iter().take(params.limit).collect()
     };
 
+    // Track access for returned memories (feeds into ranking)
+    let memory_ids: Vec<i64> = filtered.iter().map(|m| m.id).collect();
+    if !memory_ids.is_empty() {
+        let _ = db.track_memory_access(&memory_ids);
+    }
+
     if filtered.is_empty() {
         let mut msg = String::from("No memories found");
         if !query_str.is_empty() {
@@ -384,6 +390,15 @@ fn handle_get_project_context(arguments: Value, db: &McpDb) -> ToolCallResult {
         tasks,
         total_memories: total,
     };
+
+    // Track access for all returned memories (feeds into ranking)
+    let all_ids: Vec<i64> = [
+        &context.decisions, &context.facts, &context.preferences,
+        &context.context, &context.tasks,
+    ].iter().flat_map(|v| v.iter().map(|m| m.id)).collect();
+    if !all_ids.is_empty() {
+        let _ = db.track_memory_access(&all_ids);
+    }
 
     if context.total_memories == 0 {
         return ToolCallResult::text(format!("No memories found for project '{}'.", project.name));
