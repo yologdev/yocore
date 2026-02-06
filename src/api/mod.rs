@@ -4,6 +4,7 @@
 
 mod auth;
 mod config_routes;
+mod context_routes;
 pub mod routes;
 mod sse;
 
@@ -156,6 +157,12 @@ fn create_router(state: AppState) -> Router {
         .route("/config/watch", get(config_routes::list_watch_paths))
         .route("/config/watch", post(config_routes::add_watch_path))
         .route("/config/watch/:index", delete(config_routes::remove_watch_path))
+        // Context API (for LLM skills and hooks)
+        .route("/context/project", get(context_routes::get_project_context))
+        .route("/context/session", post(context_routes::get_session_context))
+        .route("/context/recent-memories", get(context_routes::get_recent_memories))
+        .route("/context/lifeboat", post(context_routes::save_lifeboat))
+        .route("/context/search", post(context_routes::search_context))
         // Server-Sent Events
         .route("/events", get(sse::events_handler))
         // Apply auth middleware to all API routes
