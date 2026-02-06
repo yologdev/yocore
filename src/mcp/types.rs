@@ -73,6 +73,7 @@ pub struct Memory {
     pub is_validated: bool,
     pub extracted_at: String,
     pub file_reference: Option<String>,
+    pub state: String,
 }
 
 /// Filters for memory queries

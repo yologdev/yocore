@@ -1725,94 +1725,106 @@ pub async fn search_memories(
     State(state): State<AppState>,
     Json(req): Json<SearchMemoriesRequest>,
 ) -> impl IntoResponse {
-    let limit = req.limit.unwrap_or(20);
+    let limit = req.limit.unwrap_or(20) as usize;
     let query_str = req.query.clone();
     let project_id_input = req.project_id.clone();
+    let db = state.db.clone();
 
-    let result = state
-        .db
-        .with_conn(move |conn| {
-            // Resolve folder-path-based ID to actual UUID if provided
-            let project_id = project_id_input
-                .as_ref()
-                .and_then(|pid| resolve_project_id(conn, pid));
+    let result = tokio::task::spawn_blocking(move || {
+        // Resolve folder-path-based ID to actual UUID if provided
+        #[allow(deprecated)]
+        let conn = db.conn();
+        let project_id = project_id_input
+            .as_ref()
+            .and_then(|pid| resolve_project_id(&conn, pid));
+        drop(conn);
 
-            let sql = if project_id.is_some() {
-                format!(
-                    "SELECT m.id, m.project_id, m.session_id, m.memory_type, m.title,
-                            m.content, m.context, m.tags, m.confidence, m.state,
-                            bm25(memories_fts) as score
-                     FROM memories_fts fts
-                     JOIN memories m ON m.id = fts.rowid
-                     WHERE memories_fts MATCH ? AND m.project_id = ? AND m.state != 'removed'
-                     ORDER BY score
-                     LIMIT {limit}"
-                )
-            } else {
-                format!(
-                    "SELECT m.id, m.project_id, m.session_id, m.memory_type, m.title,
-                            m.content, m.context, m.tags, m.confidence, m.state,
-                            bm25(memories_fts) as score
-                     FROM memories_fts fts
-                     JOIN memories m ON m.id = fts.rowid
-                     WHERE memories_fts MATCH ? AND m.state != 'removed'
-                     ORDER BY score
-                     LIMIT {limit}"
-                )
-            };
+        if let Some(ref pid) = project_id {
+            // Use hybrid search (FTS5 + vector with RRF), fall back to FTS5-only
+            let mcp_db = crate::mcp::db::McpDb::new(db);
+            match mcp_db.search_memories_hybrid(&query_str, pid, None, limit) {
+                Ok(memories) => Ok(memories),
+                Err(e) => {
+                    tracing::debug!("Hybrid search failed, falling back to FTS5: {}", e);
+                    mcp_db.search_memories_fts(&query_str, pid, None, limit)
+                }
+            }
+        } else {
+            // Cross-project search: FTS5 only (vector search requires project_id)
+            let mcp_db = crate::mcp::db::McpDb::new(db);
+            // Build FTS query with prefix matching
+            let fts_query = query_str
+                .split_whitespace()
+                .map(|word| format!("{}*", word))
+                .collect::<Vec<_>>()
+                .join(" ");
 
-            let mut stmt = conn.prepare(&sql)?;
+            #[allow(deprecated)]
+            let conn = mcp_db.db().conn();
+            let sql = format!(
+                "SELECT m.id, m.project_id, m.session_id, m.memory_type, m.title, m.content,
+                        m.context, m.tags, m.confidence, m.is_validated, m.extracted_at,
+                        m.file_reference, m.state
+                 FROM memories_fts fts
+                 JOIN memories m ON m.id = fts.rowid
+                 WHERE memories_fts MATCH ? AND m.state != 'removed'
+                 ORDER BY bm25(memories_fts)
+                 LIMIT {}",
+                limit
+            );
 
-            let memories: Vec<serde_json::Value> = if let Some(ref pid) = project_id {
-                stmt.query_map([&query_str, pid], |row| {
-                    Ok(serde_json::json!({
-                        "id": row.get::<_, i64>(0)?,
-                        "project_id": row.get::<_, String>(1)?,
-                        "session_id": row.get::<_, String>(2)?,
-                        "memory_type": row.get::<_, String>(3)?,
-                        "title": row.get::<_, String>(4)?,
-                        "content": row.get::<_, String>(5)?,
-                        "context": row.get::<_, Option<String>>(6)?,
-                        "tags": row.get::<_, String>(7)?,
-                        "confidence": row.get::<_, f64>(8)?,
-                        "state": row.get::<_, String>(9)?,
-                        "score": row.get::<_, f64>(10)?,
-                    }))
-                })?
+            let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+            let memories: Vec<crate::mcp::types::Memory> = stmt
+                .query_map([&fts_query], |row| {
+                    crate::mcp::db::row_to_memory_pub(row)
+                })
+                .map_err(|e| e.to_string())?
                 .filter_map(|r| r.ok())
-                .collect()
-            } else {
-                stmt.query_map([&query_str], |row| {
-                    Ok(serde_json::json!({
-                        "id": row.get::<_, i64>(0)?,
-                        "project_id": row.get::<_, String>(1)?,
-                        "session_id": row.get::<_, String>(2)?,
-                        "memory_type": row.get::<_, String>(3)?,
-                        "title": row.get::<_, String>(4)?,
-                        "content": row.get::<_, String>(5)?,
-                        "context": row.get::<_, Option<String>>(6)?,
-                        "tags": row.get::<_, String>(7)?,
-                        "confidence": row.get::<_, f64>(8)?,
-                        "state": row.get::<_, String>(9)?,
-                        "score": row.get::<_, f64>(10)?,
-                    }))
-                })?
-                .filter_map(|r| r.ok())
-                .collect()
-            };
-
-            Ok::<_, rusqlite::Error>(memories)
-        })
-        .await;
+                .collect();
+            Ok(memories)
+        }
+    })
+    .await;
 
     match result {
-        Ok(memories) => Json(serde_json::json!({ "memories": memories })).into_response(),
+        Ok(Ok(memories)) => {
+            let json_memories: Vec<serde_json::Value> = memories
+                .into_iter()
+                .map(memory_to_api_json)
+                .collect();
+            Json(serde_json::json!({ "memories": json_memories })).into_response()
+        }
+        Ok(Err(e)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e })),
+        )
+            .into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": e.to_string() })),
         )
             .into_response(),
     }
+}
+
+/// Convert MCP Memory to API JSON format
+/// The API returns tags as a JSON string (not parsed array) for backwards compatibility
+fn memory_to_api_json(memory: crate::mcp::types::Memory) -> serde_json::Value {
+    serde_json::json!({
+        "id": memory.id,
+        "project_id": memory.project_id,
+        "session_id": memory.session_id,
+        "memory_type": memory.memory_type.to_db_str(),
+        "title": memory.title,
+        "content": memory.content,
+        "context": memory.context,
+        "tags": serde_json::to_string(&memory.tags).unwrap_or_else(|_| "[]".to_string()),
+        "confidence": memory.confidence,
+        "is_validated": memory.is_validated,
+        "state": memory.state,
+        "extracted_at": memory.extracted_at,
+        "file_reference": memory.file_reference,
+    })
 }
 
 pub async fn get_memory(State(state): State<AppState>, Path(id): Path<i64>) -> impl IntoResponse {

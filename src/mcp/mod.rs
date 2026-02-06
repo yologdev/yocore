@@ -12,10 +12,10 @@
 //!
 //! The server communicates over stdio using JSON-RPC 2.0.
 
-mod db;
+pub(crate) mod db;
 mod handlers;
 mod protocol;
-mod types;
+pub(crate) mod types;
 
 use crate::error::Result;
 use crate::Core;

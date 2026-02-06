@@ -16,6 +16,11 @@ impl McpDb {
         Self { db }
     }
 
+    /// Access the underlying database
+    pub fn db(&self) -> &Arc<Database> {
+        &self.db
+    }
+
     /// Look up a project by path prefix (for nested project directories)
     pub fn get_project_by_path_prefix(&self, folder_path: &str) -> Result<Option<Project>, String> {
         let conn = self.db.conn();
@@ -292,7 +297,7 @@ impl McpDb {
 
         let mut sql = String::from(
             "SELECT m.id, m.project_id, m.session_id, m.memory_type, m.title, m.content,
-                    m.context, m.tags, m.confidence, m.is_validated, m.extracted_at, m.file_reference
+                    m.context, m.tags, m.confidence, m.is_validated, m.extracted_at, m.file_reference, m.state
              FROM memories m
              JOIN memories_fts ON m.id = memories_fts.rowid
              WHERE memories_fts MATCH ? AND m.state != 'removed' AND m.project_id = ?",
@@ -345,7 +350,7 @@ impl McpDb {
         let mut stmt = conn
             .prepare(
                 "SELECT m.id, m.project_id, m.session_id, m.memory_type, m.title, m.content,
-                        m.context, m.tags, m.confidence, m.is_validated, m.extracted_at, m.file_reference
+                        m.context, m.tags, m.confidence, m.is_validated, m.extracted_at, m.file_reference, m.state
                  FROM memories m
                  WHERE m.project_id = ? AND m.memory_type = ? AND m.state != 'removed'
                  ORDER BY m.confidence DESC, m.extracted_at DESC
@@ -381,7 +386,7 @@ impl McpDb {
             let fts_query = build_fts_query(q);
             (
                 "SELECT m.id, m.project_id, m.session_id, m.memory_type, m.title, m.content,
-                        m.context, m.tags, m.confidence, m.is_validated, m.extracted_at, m.file_reference
+                        m.context, m.tags, m.confidence, m.is_validated, m.extracted_at, m.file_reference, m.state
                  FROM memories m
                  JOIN memories_fts ON m.id = memories_fts.rowid
                  WHERE m.project_id = ? AND m.tags LIKE ? AND m.state != 'removed'
@@ -398,7 +403,7 @@ impl McpDb {
         } else {
             (
                 "SELECT m.id, m.project_id, m.session_id, m.memory_type, m.title, m.content,
-                        m.context, m.tags, m.confidence, m.is_validated, m.extracted_at, m.file_reference
+                        m.context, m.tags, m.confidence, m.is_validated, m.extracted_at, m.file_reference, m.state
                  FROM memories m
                  WHERE m.project_id = ? AND m.tags LIKE ? AND m.state != 'removed'
                  ORDER BY m.confidence DESC, m.extracted_at DESC
@@ -441,7 +446,7 @@ impl McpDb {
 
         let sql = format!(
             "SELECT m.id, m.project_id, m.session_id, m.memory_type, m.title, m.content,
-                    m.context, m.tags, m.confidence, m.is_validated, m.extracted_at, m.file_reference
+                    m.context, m.tags, m.confidence, m.is_validated, m.extracted_at, m.file_reference, m.state
              FROM memories m
              WHERE m.session_id IN ({}) AND m.state != 'removed'
              ORDER BY m.extracted_at DESC
@@ -539,7 +544,7 @@ impl McpDb {
         let placeholders: Vec<String> = memory_ids.iter().map(|_| "?".to_string()).collect();
         let fetch_sql = format!(
             "SELECT m.id, m.project_id, m.session_id, m.memory_type, m.title, m.content,
-                    m.context, m.tags, m.confidence, m.is_validated, m.extracted_at, m.file_reference
+                    m.context, m.tags, m.confidence, m.is_validated, m.extracted_at, m.file_reference, m.state
              FROM memories m WHERE m.id IN ({})",
             placeholders.join(", ")
         );
@@ -634,7 +639,7 @@ impl McpDb {
         let mut stmt = conn
             .prepare(
                 "SELECT m.id, m.project_id, m.session_id, m.memory_type, m.title, m.content,
-                        m.context, m.tags, m.confidence, m.is_validated, m.extracted_at, m.file_reference
+                        m.context, m.tags, m.confidence, m.is_validated, m.extracted_at, m.file_reference, m.state
                  FROM memories m
                  WHERE m.project_id = ? AND m.state = 'high'
                  ORDER BY m.confidence DESC, m.extracted_at DESC
@@ -653,6 +658,8 @@ impl McpDb {
 }
 
 /// Convert a database row to Memory
+/// Expects columns: id, project_id, session_id, memory_type, title, content,
+///                   context, tags, confidence, is_validated, extracted_at, file_reference, state
 fn row_to_memory(row: &rusqlite::Row) -> rusqlite::Result<Memory> {
     let memory_type_str: String = row.get(3)?;
     let tags_json: String = row.get(7)?;
@@ -670,7 +677,13 @@ fn row_to_memory(row: &rusqlite::Row) -> rusqlite::Result<Memory> {
         is_validated: row.get(9)?,
         extracted_at: row.get(10)?,
         file_reference: row.get(11)?,
+        state: row.get(12)?,
     })
+}
+
+/// Public wrapper for row_to_memory (used by HTTP API for cross-project search)
+pub fn row_to_memory_pub(row: &rusqlite::Row) -> rusqlite::Result<Memory> {
+    row_to_memory(row)
 }
 
 /// Build FTS5 query from user input
