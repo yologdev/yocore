@@ -3213,6 +3213,101 @@ pub async fn get_skill_stats(
     }
 }
 
+/// Backfill embeddings for memories that don't have them yet
+pub async fn backfill_embeddings(State(state): State<AppState>) -> impl IntoResponse {
+    let db = state.db.clone();
+
+    // Get memories without embeddings
+    let memories_to_embed: Vec<(i64, String, String)> = match db
+        .with_conn(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT m.id, m.title, m.content FROM memories m
+                 LEFT JOIN memory_embeddings me ON m.id = me.memory_id
+                 WHERE me.memory_id IS NULL AND m.state <> 'removed'",
+            )?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+                })?
+                .filter_map(|r| r.ok())
+                .collect::<Vec<_>>();
+            Ok::<_, rusqlite::Error>(rows)
+        })
+        .await
+    {
+        Ok(rows) => rows,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("Failed to query: {}", e) })),
+            )
+                .into_response();
+        }
+    };
+
+    let total = memories_to_embed.len();
+    if total == 0 {
+        return Json(serde_json::json!({
+            "message": "All memories already have embeddings",
+            "backfilled": 0
+        }))
+        .into_response();
+    }
+
+    // Generate embeddings in a blocking task
+    let db_clone = db.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let mut success = 0usize;
+        let mut failed = 0usize;
+
+        for (memory_id, title, content) in &memories_to_embed {
+            let text = format!("{}\n{}", title, content);
+            match crate::embeddings::embed_text(&text) {
+                Ok(embedding) => {
+                    let bytes = crate::embeddings::embedding_to_bytes(&embedding);
+                    let db_inner = db_clone.clone();
+                    let mid = *memory_id;
+                    // Use blocking conn since we're already in spawn_blocking
+                    #[allow(deprecated)]
+                    let conn = db_inner.conn();
+                    match conn.execute(
+                        "INSERT OR REPLACE INTO memory_embeddings (memory_id, embedding) VALUES (?, ?)",
+                        rusqlite::params![mid, bytes],
+                    ) {
+                        Ok(_) => success += 1,
+                        Err(e) => {
+                            tracing::warn!("Failed to store embedding for memory {}: {}", mid, e);
+                            failed += 1;
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to embed memory {}: {}", memory_id, e);
+                    failed += 1;
+                }
+            }
+        }
+
+        (success, failed)
+    })
+    .await;
+
+    match result {
+        Ok((success, failed)) => Json(serde_json::json!({
+            "message": format!("Backfill complete: {} embedded, {} failed out of {} total", success, failed, total),
+            "backfilled": success,
+            "failed": failed,
+            "total": total
+        }))
+        .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("Backfill task failed: {}", e) })),
+        )
+            .into_response(),
+    }
+}
+
 /// Delete a skill by ID
 pub async fn delete_skill_by_id(
     State(state): State<AppState>,

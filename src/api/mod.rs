@@ -146,6 +146,8 @@ fn create_router(state: AppState) -> Router {
         .route("/projects/:id/skills", get(routes::list_project_skills))
         .route("/projects/:id/skills/stats", get(routes::get_skill_stats))
         .route("/skills/:id", delete(routes::delete_skill_by_id))
+        // Embeddings
+        .route("/embeddings/backfill", post(routes::backfill_embeddings))
         // Config API
         .route("/config", get(config_routes::get_config))
         .route("/config", put(config_routes::update_config))

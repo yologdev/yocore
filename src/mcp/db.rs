@@ -3,6 +3,7 @@
 
 use super::types::{Memory, MemoryType, Project, SessionContext};
 use crate::db::Database;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 /// MCP database operations
@@ -467,6 +468,159 @@ impl McpDb {
             .collect();
 
         Ok(memories)
+    }
+
+    /// Search memories using vector similarity
+    pub fn search_memories_vector(
+        &self,
+        query: &str,
+        project_id: &str,
+        memory_types: Option<&[MemoryType]>,
+        limit: usize,
+    ) -> Result<Vec<Memory>, String> {
+        let query_embedding = crate::embeddings::embed_text(query)?;
+
+        let conn = self.db.conn();
+
+        // Load embeddings for project memories
+        let mut sql = String::from(
+            "SELECT me.memory_id, me.embedding
+             FROM memory_embeddings me
+             JOIN memories m ON me.memory_id = m.id
+             WHERE m.project_id = ? AND m.state != 'removed'",
+        );
+
+        let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+        params.push(Box::new(project_id.to_string()));
+
+        if let Some(types) = memory_types {
+            if !types.is_empty() {
+                let placeholders: Vec<&str> = types.iter().map(|_| "?").collect();
+                sql.push_str(&format!(
+                    " AND m.memory_type IN ({})",
+                    placeholders.join(", ")
+                ));
+                for t in types {
+                    params.push(Box::new(t.to_db_str().to_string()));
+                }
+            }
+        }
+
+        let params_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+        let mut stmt = conn
+            .prepare(&sql)
+            .map_err(|e| format!("Failed to prepare vector search: {}", e))?;
+
+        // Score each embedding by cosine similarity
+        let mut scored_ids: Vec<(f32, i64)> = stmt
+            .query_map(params_refs.as_slice(), |row| {
+                let memory_id: i64 = row.get(0)?;
+                let embedding_bytes: Vec<u8> = row.get(1)?;
+                Ok((memory_id, embedding_bytes))
+            })
+            .map_err(|e| format!("Failed to execute vector search: {}", e))?
+            .filter_map(|r| r.ok())
+            .map(|(id, bytes)| {
+                let embedding = crate::embeddings::bytes_to_embedding(&bytes);
+                let score = crate::embeddings::cosine_similarity(&query_embedding, &embedding);
+                (score, id)
+            })
+            .collect();
+
+        scored_ids.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        scored_ids.truncate(limit);
+
+        if scored_ids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        // Fetch full memory objects for top results
+        let memory_ids: Vec<i64> = scored_ids.iter().map(|(_, id)| *id).collect();
+        let placeholders: Vec<String> = memory_ids.iter().map(|_| "?".to_string()).collect();
+        let fetch_sql = format!(
+            "SELECT m.id, m.project_id, m.session_id, m.memory_type, m.title, m.content,
+                    m.context, m.tags, m.confidence, m.is_validated, m.extracted_at, m.file_reference
+             FROM memories m WHERE m.id IN ({})",
+            placeholders.join(", ")
+        );
+
+        let fetch_params: Vec<Box<dyn rusqlite::ToSql>> = memory_ids
+            .iter()
+            .map(|id| Box::new(*id) as Box<dyn rusqlite::ToSql>)
+            .collect();
+        let fetch_refs: Vec<&dyn rusqlite::ToSql> =
+            fetch_params.iter().map(|p| p.as_ref()).collect();
+
+        let mut fetch_stmt = conn
+            .prepare(&fetch_sql)
+            .map_err(|e| format!("Failed to prepare fetch: {}", e))?;
+        let memories_map: HashMap<i64, Memory> = fetch_stmt
+            .query_map(fetch_refs.as_slice(), |row| row_to_memory(row))
+            .map_err(|e| format!("Failed to fetch memories: {}", e))?
+            .filter_map(|r| r.ok())
+            .map(|m| (m.id, m))
+            .collect();
+
+        // Return in similarity-score order
+        Ok(scored_ids
+            .iter()
+            .filter_map(|(_, id)| memories_map.get(id).cloned())
+            .collect())
+    }
+
+    /// Search memories using hybrid FTS5 + vector with Reciprocal Rank Fusion
+    pub fn search_memories_hybrid(
+        &self,
+        query: &str,
+        project_id: &str,
+        memory_types: Option<&[MemoryType]>,
+        limit: usize,
+    ) -> Result<Vec<Memory>, String> {
+        const RRF_K: f64 = 60.0;
+
+        // Run both searches with larger limits for better fusion
+        let search_limit = limit * 3;
+
+        let fts_results =
+            self.search_memories_fts(query, project_id, memory_types, search_limit)?;
+        let vec_results =
+            self.search_memories_vector(query, project_id, memory_types, search_limit)?;
+
+        // If vector search returned nothing, just use FTS results
+        if vec_results.is_empty() {
+            let mut fts = fts_results;
+            fts.truncate(limit);
+            return Ok(fts);
+        }
+
+        // RRF fusion: score = sum(1 / (k + rank + 1)) across all lists
+        let mut rrf_scores: HashMap<i64, f64> = HashMap::new();
+        let mut memory_map: HashMap<i64, Memory> = HashMap::new();
+
+        for (rank, m) in fts_results.into_iter().enumerate() {
+            let score = 1.0 / (RRF_K + rank as f64 + 1.0);
+            *rrf_scores.entry(m.id).or_insert(0.0) += score;
+            memory_map.entry(m.id).or_insert(m);
+        }
+
+        for (rank, m) in vec_results.into_iter().enumerate() {
+            let score = 1.0 / (RRF_K + rank as f64 + 1.0);
+            *rrf_scores.entry(m.id).or_insert(0.0) += score;
+            memory_map.entry(m.id).or_insert(m);
+        }
+
+        // Sort by RRF score descending
+        let mut scored: Vec<(f64, i64)> = rrf_scores
+            .into_iter()
+            .map(|(id, score)| (score, id))
+            .collect();
+        scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        scored.truncate(limit);
+
+        Ok(scored
+            .into_iter()
+            .filter_map(|(_, id)| memory_map.remove(&id))
+            .collect())
     }
 
     /// Get high-state (persistent) memories for a project

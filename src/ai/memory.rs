@@ -395,7 +395,37 @@ pub async fn extract_memories(
 
         // Store memory
         match store_memory(db, session_id, &project_id, &memory).await {
-            Ok(_) => extracted += 1,
+            Ok(memory_id) => {
+                extracted += 1;
+                // Generate and store embedding (non-fatal)
+                let embed_text = format!("{}\n{}", memory.title, memory.content);
+                let db_embed = db.clone();
+                tokio::spawn(async move {
+                    match tokio::task::spawn_blocking(move || {
+                        crate::embeddings::embed_text(&embed_text)
+                    })
+                    .await
+                    {
+                        Ok(Ok(embedding)) => {
+                            let bytes = crate::embeddings::embedding_to_bytes(&embedding);
+                            let _ = db_embed
+                                .with_conn(move |conn| {
+                                    conn.execute(
+                                        "INSERT OR REPLACE INTO memory_embeddings (memory_id, embedding) VALUES (?, ?)",
+                                        rusqlite::params![memory_id, bytes],
+                                    )
+                                })
+                                .await;
+                        }
+                        Ok(Err(e)) => {
+                            tracing::debug!("Embedding generation failed for memory {}: {}", memory_id, e);
+                        }
+                        Err(e) => {
+                            tracing::debug!("Embedding task panicked for memory {}: {}", memory_id, e);
+                        }
+                    }
+                });
+            }
             Err(e) => {
                 tracing::warn!("Failed to store memory: {}", e);
                 skipped += 1;

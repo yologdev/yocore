@@ -270,14 +270,26 @@ fn handle_search_memories(arguments: Value, db: &McpDb) -> ToolCallResult {
             .collect()
     });
 
-    let results = match db.search_memories_fts(
+    // Try hybrid search (FTS5 + vector with RRF), fall back to FTS5-only
+    let results = match db.search_memories_hybrid(
         &params.query,
         &project.id,
         memory_types.as_deref(),
         params.limit,
     ) {
         Ok(r) => r,
-        Err(e) => return ToolCallResult::error(format!("Search failed: {}", e)),
+        Err(e) => {
+            tracing::debug!("Hybrid search failed, falling back to FTS5: {}", e);
+            match db.search_memories_fts(
+                &params.query,
+                &project.id,
+                memory_types.as_deref(),
+                params.limit,
+            ) {
+                Ok(r) => r,
+                Err(e) => return ToolCallResult::error(format!("Search failed: {}", e)),
+            }
+        }
     };
 
     if results.is_empty() {
