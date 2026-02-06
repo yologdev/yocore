@@ -9,9 +9,8 @@ use super::protocol::{
     ServerInfo, ToolCallResult, ToolDefinition, ToolsCapability,
 };
 use super::types::{
-    GetMemoriesByTagParams, GetMemoriesByTypeParams, GetProjectContextParams,
-    GetRecentMemoriesParams, GetSessionContextParams, MemoryType, ProjectContext,
-    SaveLifeboatParams, SearchMemoriesParams, SessionContextResult,
+    GetProjectContextParams, GetRecentMemoriesParams, GetSessionContextParams, MemoryType,
+    ProjectContext, SaveLifeboatParams, SearchMemoriesParams, SessionContextResult,
 };
 
 /// Handle the initialize method
@@ -41,13 +40,13 @@ pub fn handle_tools_list(id: Value) -> JsonRpcResponse {
     let tools = vec![
         ToolDefinition {
             name: "yolog_search_memories".to_string(),
-            description: "Search project memories using semantic and keyword search. Returns relevant decisions, facts, and context from past sessions.".to_string(),
+            description: "Search and browse project memories. Use with a query for semantic+keyword search, or without a query to browse/filter by type and tags. Returns decisions, facts, preferences, context, and tasks from past sessions.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "Search query describing what you want to find"
+                        "description": "Search query (optional — omit to browse/filter without keyword search)"
                     },
                     "project_path": {
                         "type": "string",
@@ -55,16 +54,23 @@ pub fn handle_tools_list(id: Value) -> JsonRpcResponse {
                     },
                     "memory_types": {
                         "type": "array",
+                        "items": {
+                            "type": "string",
+                            "enum": ["decision", "fact", "preference", "context", "task"]
+                        },
+                        "description": "Filter by memory types (e.g., [\"decision\", \"fact\"])"
+                    },
+                    "tags": {
+                        "type": "array",
                         "items": { "type": "string" },
-                        "description": "Filter by memory type: decision, fact, preference, context, task"
+                        "description": "Filter by tags — memories must contain ALL specified tags (AND logic)"
                     },
                     "limit": {
                         "type": "integer",
                         "default": 10,
                         "description": "Maximum number of results"
                     }
-                },
-                "required": ["query"]
+                }
             }),
         },
         ToolDefinition {
@@ -79,57 +85,6 @@ pub fn handle_tools_list(id: Value) -> JsonRpcResponse {
                     }
                 },
                 "required": ["project_path"]
-            }),
-        },
-        ToolDefinition {
-            name: "yolog_get_memories_by_type".to_string(),
-            description: "Get memories filtered by a specific type.".to_string(),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "project_path": {
-                        "type": "string",
-                        "description": "Project directory path"
-                    },
-                    "memory_type": {
-                        "type": "string",
-                        "enum": ["decision", "fact", "preference", "context", "task"],
-                        "description": "Type of memories to retrieve"
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "default": 10,
-                        "description": "Maximum number of results"
-                    }
-                },
-                "required": ["project_path", "memory_type"]
-            }),
-        },
-        ToolDefinition {
-            name: "yolog_get_memories_by_tag".to_string(),
-            description: "Get memories filtered by a specific tag, optionally combined with keyword search.".to_string(),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "project_path": {
-                        "type": "string",
-                        "description": "Project directory path"
-                    },
-                    "tag": {
-                        "type": "string",
-                        "description": "Tag to filter by (e.g., 'bug', 'frontend', 'security')"
-                    },
-                    "query": {
-                        "type": "string",
-                        "description": "Optional keyword search within tagged memories"
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "default": 10,
-                        "description": "Maximum number of results"
-                    }
-                },
-                "required": ["project_path", "tag"]
             }),
         },
         ToolDefinition {
@@ -224,8 +179,6 @@ pub fn handle_tools_call(id: Value, params: Option<Value>, db: &McpDb) -> JsonRp
     let result = match tool_name {
         "yolog_search_memories" => handle_search_memories(arguments, db),
         "yolog_get_project_context" => handle_get_project_context(arguments, db),
-        "yolog_get_memories_by_type" => handle_get_memories_by_type(arguments, db),
-        "yolog_get_memories_by_tag" => handle_get_memories_by_tag(arguments, db),
         "yolog_get_recent_memories" => handle_get_recent_memories(arguments, db),
         "yolog_get_session_context" => handle_get_session_context(arguments, db),
         "yolog_save_lifeboat" => handle_save_lifeboat(arguments, db),
@@ -245,6 +198,7 @@ pub fn handle_resources_list(id: Value) -> JsonRpcResponse {
 }
 
 /// Handle yolog_search_memories tool call
+/// Supports: query-only, type-filter-only, tag-filter-only, and combined modes
 fn handle_search_memories(arguments: Value, db: &McpDb) -> ToolCallResult {
     let params: SearchMemoriesParams = match serde_json::from_value(arguments) {
         Ok(p) => p,
@@ -270,43 +224,98 @@ fn handle_search_memories(arguments: Value, db: &McpDb) -> ToolCallResult {
             .collect()
     });
 
-    // Try hybrid search (FTS5 + vector with RRF), fall back to FTS5-only
-    let results = match db.search_memories_hybrid(
-        &params.query,
-        &project.id,
-        memory_types.as_deref(),
-        params.limit,
-    ) {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::debug!("Hybrid search failed, falling back to FTS5: {}", e);
-            match db.search_memories_fts(
-                &params.query,
-                &project.id,
-                memory_types.as_deref(),
-                params.limit,
-            ) {
-                Ok(r) => r,
-                Err(e) => return ToolCallResult::error(format!("Search failed: {}", e)),
+    let tag_filters = params.tags.as_deref();
+
+    // Fetch more results when tag filtering is needed (filter happens post-query)
+    let fetch_limit = if tag_filters.is_some() {
+        params.limit * 5
+    } else {
+        params.limit
+    };
+
+    let query_str = params.query.as_deref().unwrap_or("").trim();
+
+    let results = if query_str.is_empty() {
+        // Browse mode: no search query, just filter by type/tags
+        match db.browse_memories(&project.id, memory_types.as_deref(), fetch_limit) {
+            Ok(r) => r,
+            Err(e) => return ToolCallResult::error(format!("Browse failed: {}", e)),
+        }
+    } else {
+        // Search mode: hybrid search with optional type filter
+        match db.search_memories_hybrid(
+            query_str,
+            &project.id,
+            memory_types.as_deref(),
+            fetch_limit,
+        ) {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::debug!("Hybrid search failed, falling back to FTS5: {}", e);
+                match db.search_memories_fts(
+                    query_str,
+                    &project.id,
+                    memory_types.as_deref(),
+                    fetch_limit,
+                ) {
+                    Ok(r) => r,
+                    Err(e) => return ToolCallResult::error(format!("Search failed: {}", e)),
+                }
             }
         }
     };
 
-    if results.is_empty() {
-        return ToolCallResult::text(format!(
-            "No memories found for query '{}' in project '{}'.",
-            params.query, project.name
-        ));
+    // Apply tag filtering post-query (tags are stored as JSON arrays)
+    let filtered: Vec<_> = if let Some(tags) = tag_filters {
+        results
+            .into_iter()
+            .filter(|m| tags.iter().all(|tag| m.tags.iter().any(|t| t == tag)))
+            .take(params.limit)
+            .collect()
+    } else {
+        results.into_iter().take(params.limit).collect()
+    };
+
+    if filtered.is_empty() {
+        let mut msg = String::from("No memories found");
+        if !query_str.is_empty() {
+            msg.push_str(&format!(" for query '{}'", query_str));
+        }
+        if let Some(types) = &memory_types {
+            let type_names: Vec<&str> = types.iter().map(|t| t.display_name()).collect();
+            msg.push_str(&format!(" with types [{}]", type_names.join(", ")));
+        }
+        if let Some(tags) = tag_filters {
+            msg.push_str(&format!(" with tags [{}]", tags.join(", ")));
+        }
+        msg.push_str(&format!(" in project '{}'.", project.name));
+        return ToolCallResult::text(msg);
+    }
+
+    // Build output header
+    let mut header_parts = Vec::new();
+    if !query_str.is_empty() {
+        header_parts.push(format!("for query '{}'", query_str));
+    }
+    if let Some(types) = &memory_types {
+        let type_names: Vec<&str> = types.iter().map(|t| t.display_name()).collect();
+        header_parts.push(format!("types [{}]", type_names.join(", ")));
+    }
+    if let Some(tags) = tag_filters {
+        header_parts.push(format!("tags [{}]", tags.join(", ")));
     }
 
     let mut output = format!(
-        "Found {} memories in project '{}' for query '{}':\n\n",
-        results.len(),
-        project.name,
-        params.query
+        "Found {} memories in project '{}'",
+        filtered.len(),
+        project.name
     );
+    if !header_parts.is_empty() {
+        output.push_str(&format!(" {}", header_parts.join(", ")));
+    }
+    output.push_str(":\n\n");
 
-    for (i, m) in results.iter().enumerate() {
+    for (i, m) in filtered.iter().enumerate() {
         output.push_str(&format!(
             "{}. [{}] {} (confidence: {:.0}%)\n",
             i + 1,
@@ -421,149 +430,6 @@ fn handle_get_project_context(arguments: Value, db: &McpDb) -> ToolCallResult {
         output.push_str("## Tasks\n");
         for m in &context.tasks {
             output.push_str(&format!("- **{}**: {}\n", m.title, m.content));
-        }
-        output.push('\n');
-    }
-
-    ToolCallResult::text(output)
-}
-
-/// Handle yolog_get_memories_by_type tool call
-fn handle_get_memories_by_type(arguments: Value, db: &McpDb) -> ToolCallResult {
-    let params: GetMemoriesByTypeParams = match serde_json::from_value(arguments) {
-        Ok(p) => p,
-        Err(e) => return ToolCallResult::error(format!("Invalid parameters: {}", e)),
-    };
-
-    let memory_type = match MemoryType::from_str(&params.memory_type) {
-        Some(t) => t,
-        None => {
-            return ToolCallResult::error(format!(
-                "Invalid memory type: {}. Valid types: decision, fact, preference, context, task",
-                params.memory_type
-            ));
-        }
-    };
-
-    let project = match db.get_project_by_path_prefix(&params.project_path) {
-        Ok(Some(p)) => p,
-        Ok(None) => {
-            return ToolCallResult::text(format!(
-                "No Yolog project found for path: {}",
-                params.project_path
-            ));
-        }
-        Err(e) => return ToolCallResult::error(format!("Database error: {}", e)),
-    };
-
-    let memories = match db.get_memories_by_type(&project.id, memory_type, params.limit) {
-        Ok(m) => m,
-        Err(e) => return ToolCallResult::error(format!("Query failed: {}", e)),
-    };
-
-    if memories.is_empty() {
-        return ToolCallResult::text(format!(
-            "No {} memories found in project '{}'.",
-            memory_type.display_name().to_lowercase(),
-            project.name
-        ));
-    }
-
-    let mut output = format!(
-        "Found {} {} memories in project '{}':\n\n",
-        memories.len(),
-        memory_type.display_name().to_lowercase(),
-        project.name
-    );
-
-    for (i, m) in memories.iter().enumerate() {
-        output.push_str(&format!(
-            "{}. {} (confidence: {:.0}%)\n",
-            i + 1,
-            m.title,
-            m.confidence * 100.0
-        ));
-        output.push_str(&format!("   {}\n", m.content));
-        if let Some(ctx) = &m.context {
-            output.push_str(&format!("   Context: {}\n", ctx));
-        }
-        output.push('\n');
-    }
-
-    ToolCallResult::text(output)
-}
-
-/// Handle yolog_get_memories_by_tag tool call
-fn handle_get_memories_by_tag(arguments: Value, db: &McpDb) -> ToolCallResult {
-    let params: GetMemoriesByTagParams = match serde_json::from_value(arguments) {
-        Ok(p) => p,
-        Err(e) => return ToolCallResult::error(format!("Invalid parameters: {}", e)),
-    };
-
-    let project = match db.get_project_by_path_prefix(&params.project_path) {
-        Ok(Some(p)) => p,
-        Ok(None) => {
-            return ToolCallResult::text(format!(
-                "No Yolog project found for path: {}",
-                params.project_path
-            ));
-        }
-        Err(e) => return ToolCallResult::error(format!("Database error: {}", e)),
-    };
-
-    let memories = match db.get_memories_by_tag(
-        &project.id,
-        &params.tag,
-        params.query.as_deref(),
-        params.limit,
-    ) {
-        Ok(m) => m,
-        Err(e) => return ToolCallResult::error(format!("Query failed: {}", e)),
-    };
-
-    if memories.is_empty() {
-        let msg = if let Some(q) = &params.query {
-            format!(
-                "No memories with tag '{}' matching '{}' found in project '{}'.",
-                params.tag, q, project.name
-            )
-        } else {
-            format!(
-                "No memories with tag '{}' found in project '{}'.",
-                params.tag, project.name
-            )
-        };
-        return ToolCallResult::text(msg);
-    }
-
-    let mut output = if let Some(q) = &params.query {
-        format!(
-            "Found {} memories with tag '{}' matching '{}' in project '{}':\n\n",
-            memories.len(),
-            params.tag,
-            q,
-            project.name
-        )
-    } else {
-        format!(
-            "Found {} memories with tag '{}' in project '{}':\n\n",
-            memories.len(),
-            params.tag,
-            project.name
-        )
-    };
-
-    for (i, m) in memories.iter().enumerate() {
-        output.push_str(&format!(
-            "{}. [{}] {} (confidence: {:.0}%)\n",
-            i + 1,
-            m.memory_type.display_name(),
-            m.title,
-            m.confidence * 100.0
-        ));
-        output.push_str(&format!("   {}\n", m.content));
-        if !m.tags.is_empty() {
-            output.push_str(&format!("   Tags: {}\n", m.tags.join(", ")));
         }
         output.push('\n');
     }

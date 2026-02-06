@@ -115,11 +115,14 @@ pub enum SearchMatchType {
 /// MCP-specific search request parameters
 #[derive(Debug, Clone, Deserialize)]
 pub struct SearchMemoriesParams {
-    pub query: String,
+    #[serde(default)]
+    pub query: Option<String>,
     #[serde(default)]
     pub project_path: Option<String>,
     #[serde(default)]
     pub memory_types: Option<Vec<String>>,
+    #[serde(default)]
+    pub tags: Option<Vec<String>>,
     #[serde(default = "default_limit")]
     pub limit: usize,
 }
@@ -132,26 +135,6 @@ fn default_limit() -> usize {
 #[derive(Debug, Clone, Deserialize)]
 pub struct GetProjectContextParams {
     pub project_path: String,
-}
-
-/// MCP-specific get memories by type request parameters
-#[derive(Debug, Clone, Deserialize)]
-pub struct GetMemoriesByTypeParams {
-    pub project_path: String,
-    pub memory_type: String,
-    #[serde(default = "default_limit")]
-    pub limit: usize,
-}
-
-/// MCP-specific get memories by tag request parameters
-#[derive(Debug, Clone, Deserialize)]
-pub struct GetMemoriesByTagParams {
-    pub project_path: String,
-    pub tag: String,
-    #[serde(default)]
-    pub query: Option<String>,
-    #[serde(default = "default_limit")]
-    pub limit: usize,
 }
 
 /// MCP-specific get recent memories request parameters

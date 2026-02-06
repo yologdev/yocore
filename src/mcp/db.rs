@@ -370,67 +370,6 @@ impl McpDb {
         Ok(memories)
     }
 
-    /// Get memories by tag
-    pub fn get_memories_by_tag(
-        &self,
-        project_id: &str,
-        tag: &str,
-        query: Option<&str>,
-        limit: usize,
-    ) -> Result<Vec<Memory>, String> {
-        let conn = self.db.conn();
-
-        let tag_pattern = format!("%\"{}%", tag);
-
-        let (sql, params): (String, Vec<Box<dyn rusqlite::ToSql>>) = if let Some(q) = query {
-            let fts_query = build_fts_query(q);
-            (
-                "SELECT m.id, m.project_id, m.session_id, m.memory_type, m.title, m.content,
-                        m.context, m.tags, m.confidence, m.is_validated, m.extracted_at, m.file_reference, m.state
-                 FROM memories m
-                 JOIN memories_fts ON m.id = memories_fts.rowid
-                 WHERE m.project_id = ? AND m.tags LIKE ? AND m.state != 'removed'
-                 AND memories_fts MATCH ?
-                 ORDER BY bm25(memories_fts)
-                 LIMIT ?".to_string(),
-                vec![
-                    Box::new(project_id.to_string()),
-                    Box::new(tag_pattern),
-                    Box::new(fts_query),
-                    Box::new(limit.to_string()),
-                ]
-            )
-        } else {
-            (
-                "SELECT m.id, m.project_id, m.session_id, m.memory_type, m.title, m.content,
-                        m.context, m.tags, m.confidence, m.is_validated, m.extracted_at, m.file_reference, m.state
-                 FROM memories m
-                 WHERE m.project_id = ? AND m.tags LIKE ? AND m.state != 'removed'
-                 ORDER BY m.confidence DESC, m.extracted_at DESC
-                 LIMIT ?".to_string(),
-                vec![
-                    Box::new(project_id.to_string()),
-                    Box::new(tag_pattern),
-                    Box::new(limit.to_string()),
-                ]
-            )
-        };
-
-        let params_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
-
-        let mut stmt = conn
-            .prepare(&sql)
-            .map_err(|e| format!("Failed to prepare query: {}", e))?;
-
-        let memories = stmt
-            .query_map(params_refs.as_slice(), |row| row_to_memory(row))
-            .map_err(|e| format!("Failed to execute query: {}", e))?
-            .filter_map(|r| r.ok())
-            .collect();
-
-        Ok(memories)
-    }
-
     /// Get memories from specific sessions
     pub fn get_memories_by_sessions(
         &self,
@@ -626,6 +565,58 @@ impl McpDb {
             .into_iter()
             .filter_map(|(_, id)| memory_map.remove(&id))
             .collect())
+    }
+
+    /// Browse memories with optional type filters (no search query)
+    pub fn browse_memories(
+        &self,
+        project_id: &str,
+        memory_types: Option<&[MemoryType]>,
+        limit: usize,
+    ) -> Result<Vec<Memory>, String> {
+        let conn = self.db.conn();
+
+        let mut sql = String::from(
+            "SELECT m.id, m.project_id, m.session_id, m.memory_type, m.title, m.content,
+                    m.context, m.tags, m.confidence, m.is_validated, m.extracted_at, m.file_reference, m.state
+             FROM memories m
+             WHERE m.project_id = ? AND m.state != 'removed'",
+        );
+
+        let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+        params.push(Box::new(project_id.to_string()));
+
+        if let Some(types) = memory_types {
+            if !types.is_empty() {
+                let placeholders: Vec<&str> = types.iter().map(|_| "?").collect();
+                sql.push_str(&format!(
+                    " AND m.memory_type IN ({})",
+                    placeholders.join(", ")
+                ));
+                for t in types {
+                    params.push(Box::new(t.to_db_str().to_string()));
+                }
+            }
+        }
+
+        sql.push_str(&format!(
+            " ORDER BY m.confidence DESC, m.extracted_at DESC LIMIT {}",
+            limit
+        ));
+
+        let params_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+
+        let mut stmt = conn
+            .prepare(&sql)
+            .map_err(|e| format!("Failed to prepare browse query: {}", e))?;
+
+        let memories = stmt
+            .query_map(params_refs.as_slice(), |row| row_to_memory(row))
+            .map_err(|e| format!("Failed to execute browse query: {}", e))?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(memories)
     }
 
     /// Get high-state (persistent) memories for a project
