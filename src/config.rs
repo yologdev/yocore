@@ -137,6 +137,18 @@ pub struct AiFeatures {
     /// Memory ranking configuration
     #[serde(default)]
     pub ranking: RankingConfig,
+
+    /// Duplicate memory cleanup configuration
+    #[serde(default)]
+    pub duplicate_cleanup: DuplicateCleanupConfig,
+
+    /// Embedding refresh configuration
+    #[serde(default)]
+    pub embedding_refresh: EmbeddingRefreshConfig,
+
+    /// Duplicate skill cleanup configuration
+    #[serde(default)]
+    pub skill_cleanup: SkillCleanupConfig,
 }
 
 /// Memory ranking configuration
@@ -173,6 +185,114 @@ impl Default for RankingConfig {
     }
 }
 
+/// Duplicate memory cleanup configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DuplicateCleanupConfig {
+    /// Whether automatic duplicate cleanup is enabled
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Interval in hours between cleanup sweeps
+    #[serde(default = "default_cleanup_interval")]
+    pub interval_hours: u32,
+
+    /// Similarity threshold for detecting duplicates (stricter than extraction's 0.65)
+    #[serde(default = "default_similarity_threshold")]
+    pub similarity_threshold: f64,
+
+    /// Number of memories to process per batch
+    #[serde(default = "default_batch_size")]
+    pub batch_size: usize,
+}
+
+fn default_cleanup_interval() -> u32 {
+    24 // Every 24 hours
+}
+
+fn default_similarity_threshold() -> f64 {
+    0.75 // Stricter than extraction (0.65) to minimize false positives
+}
+
+impl Default for DuplicateCleanupConfig {
+    fn default() -> Self {
+        DuplicateCleanupConfig {
+            enabled: false, // Opt-in
+            interval_hours: default_cleanup_interval(),
+            similarity_threshold: default_similarity_threshold(),
+            batch_size: default_batch_size(),
+        }
+    }
+}
+
+/// Embedding refresh configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmbeddingRefreshConfig {
+    /// Whether automatic embedding refresh is enabled
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    /// Interval in hours between refresh sweeps
+    #[serde(default = "default_refresh_interval")]
+    pub interval_hours: u32,
+
+    /// Number of memories to embed per batch (lower than ranking — embeddings are CPU-heavy)
+    #[serde(default = "default_embed_batch_size")]
+    pub batch_size: usize,
+}
+
+fn default_refresh_interval() -> u32 {
+    12 // Every 12 hours
+}
+
+fn default_embed_batch_size() -> usize {
+    100 // Smaller batch — embeddings are CPU-intensive
+}
+
+impl Default for EmbeddingRefreshConfig {
+    fn default() -> Self {
+        EmbeddingRefreshConfig {
+            enabled: true,
+            interval_hours: default_refresh_interval(),
+            batch_size: default_embed_batch_size(),
+        }
+    }
+}
+
+/// Duplicate skill cleanup configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillCleanupConfig {
+    /// Whether automatic skill cleanup is enabled
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Interval in hours between cleanup sweeps
+    #[serde(default = "default_cleanup_interval")]
+    pub interval_hours: u32,
+
+    /// Similarity threshold for detecting duplicate skills (stricter than extraction's 0.70)
+    #[serde(default = "default_skill_similarity_threshold")]
+    pub similarity_threshold: f64,
+
+    /// Number of skills to process per batch
+    #[serde(default = "default_batch_size")]
+    pub batch_size: usize,
+}
+
+fn default_skill_similarity_threshold() -> f64 {
+    0.80 // Stricter than extraction (0.70) to minimize false positives
+}
+
+impl Default for SkillCleanupConfig {
+    fn default() -> Self {
+        SkillCleanupConfig {
+            enabled: false, // Opt-in
+            interval_hours: default_cleanup_interval(),
+            similarity_threshold: default_skill_similarity_threshold(),
+            batch_size: default_batch_size(),
+        }
+    }
+}
+
 impl Default for AiFeatures {
     fn default() -> Self {
         AiFeatures {
@@ -180,6 +300,9 @@ impl Default for AiFeatures {
             skills_discovery: true,
             memory_extraction: true,
             ranking: RankingConfig::default(),
+            duplicate_cleanup: DuplicateCleanupConfig::default(),
+            embedding_refresh: EmbeddingRefreshConfig::default(),
+            skill_cleanup: SkillCleanupConfig::default(),
         }
     }
 }
@@ -358,6 +481,26 @@ memory_extraction = true
 [ai.features.ranking]
 enabled = true
 interval_hours = 6
+batch_size = 500
+
+[ai.features.duplicate_cleanup]
+# Retroactive duplicate memory detection and removal
+enabled = false
+interval_hours = 24
+similarity_threshold = 0.75
+batch_size = 500
+
+[ai.features.embedding_refresh]
+# Backfill embeddings for memories missing them
+enabled = true
+interval_hours = 12
+batch_size = 100
+
+[ai.features.skill_cleanup]
+# Retroactive duplicate skill detection and removal
+enabled = false
+interval_hours = 24
+similarity_threshold = 0.80
 batch_size = 500
 "#;
 

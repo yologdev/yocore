@@ -75,6 +75,23 @@ pub enum SseEvent {
     },
     /// Memory ranking error
     RankingError { project_id: String, error: String },
+    /// Scheduler task started
+    SchedulerTaskStart {
+        task_name: String,
+        project_id: String,
+    },
+    /// Scheduler task completed
+    SchedulerTaskComplete {
+        task_name: String,
+        project_id: String,
+        detail: String,
+    },
+    /// Scheduler task error
+    SchedulerTaskError {
+        task_name: String,
+        project_id: String,
+        error: String,
+    },
 }
 
 impl From<WatcherEvent> for SseEvent {
@@ -125,6 +142,31 @@ impl From<WatcherEvent> for SseEvent {
             WatcherEvent::RankingError { project_id, error } => {
                 SseEvent::RankingError { project_id, error }
             }
+            WatcherEvent::SchedulerTaskStart {
+                task_name,
+                project_id,
+            } => SseEvent::SchedulerTaskStart {
+                task_name,
+                project_id,
+            },
+            WatcherEvent::SchedulerTaskComplete {
+                task_name,
+                project_id,
+                detail,
+            } => SseEvent::SchedulerTaskComplete {
+                task_name,
+                project_id,
+                detail,
+            },
+            WatcherEvent::SchedulerTaskError {
+                task_name,
+                project_id,
+                error,
+            } => SseEvent::SchedulerTaskError {
+                task_name,
+                project_id,
+                error,
+            },
         }
     }
 }
@@ -189,6 +231,10 @@ fn get_event_type(event: &SseEvent) -> &'static str {
         SseEvent::RankingStart { .. } => "ai:ranking:start",
         SseEvent::RankingComplete { .. } => "ai:ranking:complete",
         SseEvent::RankingError { .. } => "ai:ranking:error",
+        // Scheduler events
+        SseEvent::SchedulerTaskStart { .. } => "scheduler:start",
+        SseEvent::SchedulerTaskComplete { .. } => "scheduler:complete",
+        SseEvent::SchedulerTaskError { .. } => "scheduler:error",
     }
 }
 

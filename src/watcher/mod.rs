@@ -52,6 +52,20 @@ pub enum WatcherEvent {
     },
     /// Memory ranking error
     RankingError { project_id: String, error: String },
+    /// Generic scheduler task started
+    SchedulerTaskStart { task_name: String, project_id: String },
+    /// Generic scheduler task completed
+    SchedulerTaskComplete {
+        task_name: String,
+        project_id: String,
+        detail: String,
+    },
+    /// Generic scheduler task error
+    SchedulerTaskError {
+        task_name: String,
+        project_id: String,
+        error: String,
+    },
 }
 
 /// Handle for controlling the file watcher

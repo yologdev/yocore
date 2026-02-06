@@ -102,8 +102,8 @@ async fn main() -> anyhow::Result<()> {
             core.start_watching().await?;
         }
 
-        // Start periodic memory ranking background task
-        core.start_periodic_ranking();
+        // Start periodic background tasks (ranking, duplicate cleanup, embedding refresh)
+        core.start_periodic_tasks();
 
         // Recover pending AI tasks (title, memory, skills) from previous sessions
         core.recover_pending_ai_tasks().await;
