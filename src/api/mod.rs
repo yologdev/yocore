@@ -86,6 +86,7 @@ fn create_router(state: AppState) -> Router {
         // Projects
         .route("/projects", get(routes::list_projects))
         .route("/projects", post(routes::create_project))
+        .route("/projects/resolve", get(routes::resolve_project))
         .route("/projects/:id", get(routes::get_project))
         .route("/projects/:id", patch(routes::update_project))
         .route("/projects/:id", delete(routes::delete_project))

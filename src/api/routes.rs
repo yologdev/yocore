@@ -298,6 +298,56 @@ pub async fn delete_project(
 }
 
 // ============================================================================
+// Project Resolve (path → project)
+// ============================================================================
+
+#[derive(Debug, Deserialize)]
+pub struct ResolveProjectQuery {
+    pub path: String,
+}
+
+/// GET /api/projects/resolve?path=<CWD>
+/// Resolves a filesystem path to a project (exact match, Claude path conversion, prefix match).
+pub async fn resolve_project(
+    State(state): State<AppState>,
+    Query(query): Query<ResolveProjectQuery>,
+) -> impl IntoResponse {
+    let db = state.db.clone();
+    let path = query.path;
+    let path_for_error = path.clone();
+
+    let result = tokio::task::spawn_blocking(move || {
+        let mcp_db = crate::mcp::db::McpDb::new(db);
+        mcp_db.get_project_by_path_prefix(&path)
+    })
+    .await;
+
+    match result {
+        Ok(Ok(Some(project))) => Json(serde_json::json!({
+            "id": project.id,
+            "name": project.name,
+            "folder_path": project.folder_path,
+        }))
+        .into_response(),
+        Ok(Ok(None)) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": format!("No project found for path: {}", path_for_error) })),
+        )
+            .into_response(),
+        Ok(Err(e)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+// ============================================================================
 // Project Analytics
 // ============================================================================
 
