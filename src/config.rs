@@ -14,9 +14,9 @@ pub struct Config {
     #[serde(default)]
     pub server: ServerConfig,
 
-    /// Projects to track (watches paths for session files)
-    #[serde(default, alias = "watch")]
-    pub projects: Vec<ProjectConfig>,
+    /// Watch paths for session files
+    #[serde(default, alias = "projects")]
+    pub watch: Vec<WatchConfig>,
 
     /// AI feature configuration
     #[serde(default)]
@@ -70,21 +70,17 @@ impl Default for ServerConfig {
     }
 }
 
-/// Project configuration — defines a watched path for session files
+/// Watch configuration — defines a directory to watch for session files
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProjectConfig {
-    /// Display name for auto-created projects
-    #[serde(default)]
-    pub name: Option<String>,
-
-    /// Path to watch for session files
+pub struct WatchConfig {
+    /// Path to watch for session files (parent directory containing project subdirs)
     pub path: PathBuf,
 
     /// Parser type (claude_code, openclaw, etc.)
     #[serde(default = "default_parser")]
     pub parser: String,
 
-    /// Whether this project is enabled
+    /// Whether this watch path is enabled
     #[serde(default = "default_true")]
     pub enabled: bool,
 }
@@ -315,7 +311,7 @@ impl Default for Config {
     fn default() -> Self {
         Config {
             server: ServerConfig::default(),
-            projects: vec![],
+            watch: vec![],
             ai: AiConfig::default(),
             data_dir: default_data_dir(),
         }
@@ -379,12 +375,12 @@ impl Config {
             .unwrap_or_else(|| SocketAddr::from(([127, 0, 0, 1], self.server.port)))
     }
 
-    /// Get expanded project paths
-    pub fn project_paths(&self) -> Vec<(PathBuf, String)> {
-        self.projects
+    /// Get expanded watch paths
+    pub fn watch_paths(&self) -> Vec<(PathBuf, String)> {
+        self.watch
             .iter()
-            .filter(|p| p.enabled)
-            .map(|p| (expand_path(&p.path), p.parser.clone()))
+            .filter(|w| w.enabled)
+            .map(|w| (expand_path(&w.path), w.parser.clone()))
             .collect()
     }
 
@@ -460,16 +456,15 @@ host = "127.0.0.1"
 # If set, clients must send: Authorization: Bearer <api_key>
 # api_key = "your-secret-key"
 
-# Projects to track (session file directories)
-# Projects are auto-created in the database on startup.
-[[projects]]
+# Directories to watch for session files
+# Projects are auto-created when sessions are discovered.
+[[watch]]
 path = "~/.claude/projects"
 parser = "claude_code"
 enabled = true
 
-# Add more project paths as needed:
-# [[projects]]
-# name = "My Project"
+# Add more watch paths as needed:
+# [[watch]]
 # path = "~/.openclaw/workspace"
 # parser = "openclaw"
 # enabled = true
@@ -550,8 +545,7 @@ mod tests {
 port = 9000
 host = "0.0.0.0"
 
-[[projects]]
-name = "My Sessions"
+[[watch]]
 path = "~/.claude/projects"
 parser = "claude_code"
 
@@ -567,23 +561,23 @@ skills_discovery = false
         let config: Config = toml::from_str(toml).unwrap();
         assert_eq!(config.server.port, 9000);
         assert_eq!(config.server.host, "0.0.0.0");
-        assert_eq!(config.projects.len(), 1);
-        assert_eq!(config.projects[0].name.as_deref(), Some("My Sessions"));
+        assert_eq!(config.watch.len(), 1);
+        assert_eq!(config.watch[0].parser, "claude_code");
         assert!(config.ai.enabled);
         assert!(config.ai.features.title_generation);
         assert!(!config.ai.features.skills_discovery);
     }
 
     #[test]
-    fn test_backward_compat_watch_alias() {
+    fn test_backward_compat_projects_alias() {
         let toml = r#"
-[[watch]]
+[[projects]]
 path = "~/.claude/projects"
 parser = "claude_code"
 "#;
 
         let config: Config = toml::from_str(toml).unwrap();
-        assert_eq!(config.projects.len(), 1);
-        assert_eq!(config.projects[0].parser, "claude_code");
+        assert_eq!(config.watch.len(), 1);
+        assert_eq!(config.watch[0].parser, "claude_code");
     }
 }

@@ -121,7 +121,7 @@ pub async fn start_watcher(
 ) -> Result<WatcherHandle> {
     let (shutdown_tx, mut shutdown_rx) = mpsc::channel::<()>(1);
 
-    let watch_paths = config.project_paths();
+    let watch_paths = config.watch_paths();
 
     if watch_paths.is_empty() {
         tracing::info!("No project paths configured, file watcher idle");
@@ -551,13 +551,10 @@ async fn store_session(
         .with_conn(move |conn| {
             use rusqlite::params;
 
-            // Get existing project for this folder (don't auto-create)
-            // If no project exists, skip storing this session
-            let project_id = match get_project_for_path_sync(conn, &path) {
+            // Get or create project for this folder
+            let project_id = match get_or_create_project_for_path_sync(conn, &path) {
                 Some(id) => id,
                 None => {
-                    // No project exists for this folder - skip silently
-                    // Users must explicitly add projects they want to track
                     return Ok(None);
                 }
             };
@@ -657,25 +654,36 @@ async fn store_session(
     Ok(true) // Session was stored
 }
 
-/// Get an existing project for the given session file path (does NOT auto-create)
-/// Returns None if no project exists for this folder - session will be skipped
-fn get_project_for_path_sync(
+/// Get or create a project for the given session file path.
+/// If no project exists for this folder, auto-creates one with a derived name.
+fn get_or_create_project_for_path_sync(
     conn: &rusqlite::Connection,
     session_path: &PathBuf,
 ) -> Option<String> {
     use rusqlite::params;
 
-    // Get parent directory as project folder
-    let folder_path = session_path
-        .parent()?
-        .to_string_lossy()
-        .to_string();
+    let folder = session_path.parent()?;
+    let folder_path = folder.to_string_lossy().to_string();
 
-    // Check if project already exists for this folder
-    conn.query_row(
+    // Try existing project first
+    if let Ok(id) = conn.query_row(
         "SELECT id FROM projects WHERE folder_path = ?",
         params![folder_path],
-        |row| row.get(0),
+        |row| row.get::<_, String>(0),
+    ) {
+        return Some(id);
+    }
+
+    // Auto-create: derive name from folder path
+    let name = crate::derive_project_name(folder);
+    let id = uuid::Uuid::new_v4().to_string();
+    conn.execute(
+        "INSERT INTO projects (id, name, folder_path, auto_sync, created_at, updated_at)
+         VALUES (?, ?, ?, 1, datetime('now'), datetime('now'))",
+        params![id, name, folder_path],
     )
-    .ok()
+    .ok()?;
+
+    tracing::info!("Auto-created project '{}' for {}", name, folder_path);
+    Some(id)
 }
