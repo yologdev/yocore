@@ -106,8 +106,8 @@ struct WatcherState {
     db: Arc<Database>,
     /// Broadcast event sender (for SSE)
     event_tx: broadcast::Sender<WatcherEvent>,
-    /// AI auto-trigger (triggers title/memory/skills after parsing)
-    ai_trigger: AiAutoTrigger,
+    /// AI auto-trigger — separate from state lock to avoid blocking event processing
+    ai_trigger: Arc<tokio::sync::Mutex<AiAutoTrigger>>,
 }
 
 /// Start watching configured paths for session files
@@ -183,18 +183,18 @@ pub async fn start_watcher(
         );
     }
 
-    let ai_trigger = AiAutoTrigger::new(
+    let ai_trigger = Arc::new(tokio::sync::Mutex::new(AiAutoTrigger::new(
         config_path,
         db.clone(),
         ai_event_tx,
         ai_task_queue,
-    );
+    )));
 
     let state = Arc::new(tokio::sync::RwLock::new(WatcherState {
         watched,
         db,
         event_tx,
-        ai_trigger,
+        ai_trigger: Arc::clone(&ai_trigger),
     }));
 
     // Create a channel to send events from notify thread to tokio runtime
@@ -219,10 +219,15 @@ pub async fn start_watcher(
     );
 
     // Spawn tokio task to handle events from the channel
+    // Each event is spawned as its own task to prevent starvation
+    // (a long-running parse of one file shouldn't block processing of other files)
     let state_for_handler = Arc::clone(&state);
     tokio::spawn(async move {
         while let Some(path) = notify_rx.recv().await {
-            handle_file_event(&state_for_handler, &path).await;
+            let state_clone = Arc::clone(&state_for_handler);
+            tokio::spawn(async move {
+                handle_file_event(&state_clone, &path).await;
+            });
         }
     });
 
@@ -386,8 +391,9 @@ async fn handle_file_event(state: &Arc<tokio::sync::RwLock<WatcherState>>, path:
             if let Some(message_count) =
                 parse_session_file(&db, &event_tx, &path_str, &file_stem, &parser_type).await
             {
-                // Auto-trigger AI tasks after successful parse
-                state.write().await.ai_trigger.on_session_parsed(&file_stem, message_count).await;
+                // Auto-trigger AI tasks without holding the watcher state lock
+                let ai_trigger = state.read().await.ai_trigger.clone();
+                ai_trigger.lock().await.on_session_parsed(&file_stem, message_count).await;
             }
             return; // Exit early since we dropped the lock
         }
@@ -416,8 +422,9 @@ async fn handle_file_event(state: &Arc<tokio::sync::RwLock<WatcherState>>, path:
         if let Some(message_count) =
             parse_session_file(&db, &event_tx, &path_str, &file_stem, &parser_type).await
         {
-            // Auto-trigger AI tasks after successful parse
-            state.write().await.ai_trigger.on_session_parsed(&file_stem, message_count).await;
+            // Auto-trigger AI tasks without holding the watcher state lock
+            let ai_trigger = state.read().await.ai_trigger.clone();
+            ai_trigger.lock().await.on_session_parsed(&file_stem, message_count).await;
         }
     }
 }
