@@ -108,7 +108,97 @@ impl Core {
         }
     }
 
-    /// Start the file watcher for configured watch paths
+    /// Sync projects from config — auto-create or update DB projects
+    ///
+    /// For each `[[projects]]` entry, scans subdirectories and ensures a
+    /// matching project record exists in the database. Updates names if changed.
+    pub async fn sync_projects_from_config(&self) {
+        let db = self.db.clone();
+
+        for project_config in &self.config.projects {
+            if !project_config.enabled {
+                continue;
+            }
+
+            let path = config::expand_path(&project_config.path);
+            if !path.exists() || !path.is_dir() {
+                tracing::warn!(
+                    "Project path does not exist: {}",
+                    path.display()
+                );
+                continue;
+            }
+
+            // Scan subdirectories — each is a potential project
+            let subdirs = match std::fs::read_dir(&path) {
+                Ok(entries) => entries
+                    .filter_map(|e| e.ok())
+                    .filter(|e| e.path().is_dir())
+                    .collect::<Vec<_>>(),
+                Err(e) => {
+                    tracing::warn!("Failed to read project path {}: {}", path.display(), e);
+                    continue;
+                }
+            };
+
+            for entry in subdirs {
+                let folder_path = entry.path();
+                let folder_str = folder_path.to_string_lossy().to_string();
+                let name = derive_project_name(&folder_path);
+
+                let folder_for_query = folder_str.clone();
+                let name_clone = name.clone();
+
+                let result: std::result::Result<Option<String>, rusqlite::Error> = db
+                    .with_conn(move |conn| {
+                        // Check if project exists
+                        let existing: Option<(String, String)> = conn
+                            .query_row(
+                                "SELECT id, name FROM projects WHERE folder_path = ?",
+                                [&folder_for_query],
+                                |row| Ok((row.get(0)?, row.get(1)?)),
+                            )
+                            .ok();
+
+                        match existing {
+                            Some((id, existing_name)) => {
+                                if existing_name != name_clone {
+                                    let _ = conn.execute(
+                                        "UPDATE projects SET name = ?, updated_at = datetime('now') WHERE id = ?",
+                                        rusqlite::params![name_clone, id],
+                                    );
+                                    Ok(Some(format!("updated:{}", name_clone)))
+                                } else {
+                                    Ok(None) // No change
+                                }
+                            }
+                            None => {
+                                let id = uuid::Uuid::new_v4().to_string();
+                                conn.execute(
+                                    "INSERT INTO projects (id, name, folder_path, auto_sync, created_at, updated_at)
+                                     VALUES (?, ?, ?, 1, datetime('now'), datetime('now'))",
+                                    rusqlite::params![id, name_clone, folder_for_query],
+                                )?;
+                                Ok(Some(format!("created:{}", name_clone)))
+                            }
+                        }
+                    })
+                    .await;
+
+                match result {
+                    Ok(Some(action)) => {
+                        tracing::info!("Project sync: {} ({})", action, folder_str);
+                    }
+                    Ok(None) => {} // Already exists, no change
+                    Err(e) => {
+                        tracing::warn!("Failed to sync project {}: {}", folder_str, e);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Start the file watcher for configured project paths
     pub async fn start_watching(&self) -> Result<()> {
         let handle = watcher::start_watcher(
             &self.config,
@@ -146,8 +236,7 @@ impl Core {
                         (s.skills_extracted_at IS NULL) as needs_skills
                     FROM sessions s
                     INNER JOIN projects p ON s.project_id = p.id
-                    WHERE p.auto_sync = 1
-                      AND COALESCE(s.import_status, 'success') = 'success'
+                    WHERE COALESCE(s.import_status, 'success') = 'success'
                       AND s.message_count >= 25
                       AND (
                         (COALESCE(s.title_ai_generated, 0) = 0 AND COALESCE(s.title_edited, 0) = 0)
@@ -266,4 +355,30 @@ impl Core {
     pub fn event_sender(&self) -> broadcast::Sender<watcher::WatcherEvent> {
         self.event_tx.clone()
     }
+}
+
+/// Derive a human-readable project name from a folder path.
+///
+/// Claude Code uses folder names like `-Users-yuanhao-vibedev-yolog` which is
+/// the original path with `/` replaced by `-`. This function extracts the last
+/// meaningful component (e.g., `yolog`).
+fn derive_project_name(folder_path: &std::path::Path) -> String {
+    let dir_name = folder_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("unknown");
+
+    // Claude Code format: -Users-username-path-to-project
+    // Reverse the transformation: replace `-` with `/`, parse as path, take last component
+    if dir_name.starts_with('-') {
+        let as_path = dir_name.replace('-', "/");
+        if let Some(last) = std::path::Path::new(&as_path)
+            .file_name()
+            .and_then(|n| n.to_str())
+        {
+            return last.to_string();
+        }
+    }
+
+    dir_name.to_string()
 }

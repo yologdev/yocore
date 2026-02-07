@@ -14,9 +14,9 @@ pub struct Config {
     #[serde(default)]
     pub server: ServerConfig,
 
-    /// Watch paths configuration
-    #[serde(default)]
-    pub watch: Vec<WatchConfig>,
+    /// Projects to track (watches paths for session files)
+    #[serde(default, alias = "watch")]
+    pub projects: Vec<ProjectConfig>,
 
     /// AI feature configuration
     #[serde(default)]
@@ -70,9 +70,13 @@ impl Default for ServerConfig {
     }
 }
 
-/// Watch path configuration
+/// Project configuration — defines a watched path for session files
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WatchConfig {
+pub struct ProjectConfig {
+    /// Display name for auto-created projects
+    #[serde(default)]
+    pub name: Option<String>,
+
     /// Path to watch for session files
     pub path: PathBuf,
 
@@ -80,7 +84,7 @@ pub struct WatchConfig {
     #[serde(default = "default_parser")]
     pub parser: String,
 
-    /// Whether this watch path is enabled
+    /// Whether this project is enabled
     #[serde(default = "default_true")]
     pub enabled: bool,
 }
@@ -311,7 +315,7 @@ impl Default for Config {
     fn default() -> Self {
         Config {
             server: ServerConfig::default(),
-            watch: vec![],
+            projects: vec![],
             ai: AiConfig::default(),
             data_dir: default_data_dir(),
         }
@@ -375,12 +379,12 @@ impl Config {
             .unwrap_or_else(|| SocketAddr::from(([127, 0, 0, 1], self.server.port)))
     }
 
-    /// Get expanded watch paths
-    pub fn watch_paths(&self) -> Vec<(PathBuf, String)> {
-        self.watch
+    /// Get expanded project paths
+    pub fn project_paths(&self) -> Vec<(PathBuf, String)> {
+        self.projects
             .iter()
-            .filter(|w| w.enabled)
-            .map(|w| (expand_path(&w.path), w.parser.clone()))
+            .filter(|p| p.enabled)
+            .map(|p| (expand_path(&p.path), p.parser.clone()))
             .collect()
     }
 
@@ -456,14 +460,16 @@ host = "127.0.0.1"
 # If set, clients must send: Authorization: Bearer <api_key>
 # api_key = "your-secret-key"
 
-# Watch paths for session files
-[[watch]]
+# Projects to track (session file directories)
+# Projects are auto-created in the database on startup.
+[[projects]]
 path = "~/.claude/projects"
 parser = "claude_code"
 enabled = true
 
-# Add more watch paths as needed:
-# [[watch]]
+# Add more project paths as needed:
+# [[projects]]
+# name = "My Project"
 # path = "~/.openclaw/workspace"
 # parser = "openclaw"
 # enabled = true
@@ -515,7 +521,7 @@ batch_size = 500
 }
 
 /// Expand ~ to home directory in paths
-fn expand_path(path: &Path) -> PathBuf {
+pub fn expand_path(path: &Path) -> PathBuf {
     if path.starts_with("~") {
         if let Some(home) = dirs::home_dir() {
             return home.join(path.strip_prefix("~").unwrap());
@@ -544,7 +550,8 @@ mod tests {
 port = 9000
 host = "0.0.0.0"
 
-[[watch]]
+[[projects]]
+name = "My Sessions"
 path = "~/.claude/projects"
 parser = "claude_code"
 
@@ -560,9 +567,23 @@ skills_discovery = false
         let config: Config = toml::from_str(toml).unwrap();
         assert_eq!(config.server.port, 9000);
         assert_eq!(config.server.host, "0.0.0.0");
-        assert_eq!(config.watch.len(), 1);
+        assert_eq!(config.projects.len(), 1);
+        assert_eq!(config.projects[0].name.as_deref(), Some("My Sessions"));
         assert!(config.ai.enabled);
         assert!(config.ai.features.title_generation);
         assert!(!config.ai.features.skills_discovery);
+    }
+
+    #[test]
+    fn test_backward_compat_watch_alias() {
+        let toml = r#"
+[[watch]]
+path = "~/.claude/projects"
+parser = "claude_code"
+"#;
+
+        let config: Config = toml::from_str(toml).unwrap();
+        assert_eq!(config.projects.len(), 1);
+        assert_eq!(config.projects[0].parser, "claude_code");
     }
 }

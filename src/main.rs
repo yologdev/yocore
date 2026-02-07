@@ -93,11 +93,14 @@ async fn main() -> anyhow::Result<()> {
         // HTTP server mode
         tracing::info!("Starting HTTP server mode");
 
-        // Start file watcher if watch paths are configured
-        if !core.config.watch.is_empty() {
+        // Auto-create projects from config before watching
+        core.sync_projects_from_config().await;
+
+        // Start file watcher if project paths are configured
+        if !core.config.projects.is_empty() {
             tracing::info!(
-                "Starting file watcher for {} paths",
-                core.config.watch.len()
+                "Starting file watcher for {} project paths",
+                core.config.projects.len()
             );
             core.start_watching().await?;
         }

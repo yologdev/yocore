@@ -121,10 +121,10 @@ pub async fn start_watcher(
 ) -> Result<WatcherHandle> {
     let (shutdown_tx, mut shutdown_rx) = mpsc::channel::<()>(1);
 
-    let watch_paths = config.watch_paths();
+    let watch_paths = config.project_paths();
 
     if watch_paths.is_empty() {
-        tracing::info!("No watch paths configured, file watcher idle");
+        tracing::info!("No project paths configured, file watcher idle");
         return Ok(WatcherHandle { shutdown_tx });
     }
 

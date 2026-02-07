@@ -4,7 +4,7 @@
 //! Changes are persisted to config.toml.
 
 use super::AppState;
-use crate::config::{AiConfig, Config, WatchConfig};
+use crate::config::{AiConfig, Config, ProjectConfig};
 use axum::{
     extract::{Path, State},
     http::StatusCode,
@@ -122,7 +122,7 @@ pub async fn get_config(State(state): State<AppState>) -> impl IntoResponse {
                     has_api_key: config.server.api_key.is_some(),
                 },
                 watch: config
-                    .watch
+                    .projects
                     .iter()
                     .enumerate()
                     .map(|(i, w)| WatchConfigResponse {
@@ -284,7 +284,7 @@ pub async fn list_watch_paths(State(state): State<AppState>) -> impl IntoRespons
     match Config::from_file(&state.config_path) {
         Ok(config) => {
             let watch_paths: Vec<WatchConfigResponse> = config
-                .watch
+                .projects
                 .iter()
                 .enumerate()
                 .map(|(i, w)| WatchConfigResponse {
@@ -336,7 +336,7 @@ pub async fn add_watch_path(
     let new_path = PathBuf::from(&req.path);
 
     // Check if path already exists
-    if config.watch.iter().any(|w| w.path == new_path) {
+    if config.projects.iter().any(|w| w.path == new_path) {
         return (
             StatusCode::CONFLICT,
             Json(serde_json::json!({ "error": "Watch path already exists" })),
@@ -345,7 +345,8 @@ pub async fn add_watch_path(
     }
 
     // Add new watch path
-    config.watch.push(WatchConfig {
+    config.projects.push(ProjectConfig {
+        name: None,
         path: new_path,
         parser: req.parser.unwrap_or_else(|| "claude_code".to_string()),
         enabled: req.enabled.unwrap_or(true),
@@ -355,7 +356,7 @@ pub async fn add_watch_path(
     match config.save_to_file(&state.config_path) {
         Ok(()) => {
             let watch_paths: Vec<WatchConfigResponse> = config
-                .watch
+                .projects
                 .iter()
                 .enumerate()
                 .map(|(i, w)| WatchConfigResponse {
@@ -409,7 +410,7 @@ pub async fn remove_watch_path(
     };
 
     // Check if index is valid
-    if index >= config.watch.len() {
+    if index >= config.projects.len() {
         return (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({ "error": "Watch path index out of range" })),
@@ -418,7 +419,7 @@ pub async fn remove_watch_path(
     }
 
     // Remove the watch path
-    config.watch.remove(index);
+    config.projects.remove(index);
 
     // Save config
     match config.save_to_file(&state.config_path) {

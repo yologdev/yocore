@@ -201,7 +201,6 @@ pub struct UpdateProjectRequest {
     pub repo_url: Option<String>,
     pub language: Option<String>,
     pub framework: Option<String>,
-    pub auto_sync: Option<bool>,
 }
 
 pub async fn update_project(
@@ -240,11 +239,6 @@ pub async fn update_project(
                 updates.push("framework = ?");
                 params.push(Box::new(fw));
             }
-            if let Some(sync) = req.auto_sync {
-                updates.push("auto_sync = ?");
-                params.push(Box::new(sync));
-            }
-
             params.push(Box::new(id_clone));
 
             let query = format!("UPDATE projects SET {} WHERE id = ?", updates.join(", "));
@@ -2251,8 +2245,7 @@ pub async fn get_pending_ai_sessions(State(state): State<AppState>) -> impl Into
                     (s.skills_extracted_at IS NULL) as needs_skills
                 FROM sessions s
                 INNER JOIN projects p ON s.project_id = p.id
-                WHERE p.auto_sync = 1
-                  AND COALESCE(s.import_status, 'success') = 'success'
+                WHERE COALESCE(s.import_status, 'success') = 'success'
                   AND s.message_count >= 25
                   AND (
                     (COALESCE(s.title_ai_generated, 0) = 0 AND COALESCE(s.title_edited, 0) = 0)
