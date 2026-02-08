@@ -39,7 +39,7 @@ pub async fn list_projects(
 
     let result = state
         .db
-        .with_conn(move |conn| {
+        .with_read_conn(move |conn| {
             let mut stmt = conn.prepare(
                 "SELECT id, name, folder_path, description, repo_url, language, framework,
                         auto_sync, longest_streak, created_at, updated_at
@@ -154,7 +154,7 @@ pub async fn get_project(
 ) -> impl IntoResponse {
     let result = state
         .db
-        .with_conn(move |conn| {
+        .with_read_conn(move |conn| {
             conn.query_row(
                 "SELECT id, name, folder_path, description, repo_url, language, framework,
                         auto_sync, longest_streak, created_at, updated_at
@@ -420,7 +420,7 @@ pub async fn get_project_analytics(
 ) -> impl IntoResponse {
     let result = state
         .db
-        .with_conn(move |conn| {
+        .with_read_conn(move |conn| {
             // 1. Project Stats
             let total_sessions: i64 = conn
                 .query_row(
@@ -677,7 +677,7 @@ pub async fn list_sessions(
 
     let result = state
         .db
-        .with_conn(move |conn| {
+        .with_read_conn(move |conn| {
             // Resolve folder-path-based ID to actual UUID if provided
             let project_id = project_id_input
                 .as_ref()
@@ -773,7 +773,7 @@ pub async fn get_session(
 ) -> impl IntoResponse {
     let result = state
         .db
-        .with_conn(move |conn| {
+        .with_read_conn(move |conn| {
             conn.query_row(
                 "SELECT id, project_id, file_path, title, ai_tool, message_count,
                         duration_ms, has_code, has_errors, is_hidden, created_at, indexed_at
@@ -910,7 +910,7 @@ pub async fn get_session_messages(
 
     let result = state
         .db
-        .with_conn(move |conn| {
+        .with_read_conn(move |conn| {
             let session_id_clone = session_id.clone();
             let mut stmt = conn.prepare(
                 "SELECT id, sequence_num, role, content_preview, search_content, has_code, has_error,
@@ -984,7 +984,7 @@ pub async fn get_message_content(
     // Get the file path and byte offset from database
     let db_result = state
         .db
-        .with_conn(move |conn| {
+        .with_read_conn(move |conn| {
             conn.query_row(
                 "SELECT s.file_path, m.byte_offset, m.byte_length
                  FROM session_messages m
@@ -1082,7 +1082,7 @@ pub async fn search(
 
     let result = state
         .db
-        .with_conn(move |conn| {
+        .with_read_conn(move |conn| {
             // Build filter clauses
             let mut filter_clauses = String::new();
 
@@ -1208,7 +1208,7 @@ pub async fn search_session(
 
     let result = state
         .db
-        .with_conn(move |conn| {
+        .with_read_conn(move |conn| {
             let sql = format!(
                 "SELECT m.sequence_num, m.content_preview, m.timestamp,
                         bm25(session_messages_fts) as score
@@ -1274,7 +1274,7 @@ pub async fn read_session_bytes(
     // Get file path from session
     let file_path_result = state
         .db
-        .with_conn(move |conn| {
+        .with_read_conn(move |conn| {
             conn.query_row(
                 "SELECT file_path FROM sessions WHERE id = ?",
                 [&session_id],
@@ -1608,7 +1608,7 @@ pub async fn list_memories(
 ) -> impl IntoResponse {
     let result = state
         .db
-        .with_conn(move |conn| {
+        .with_read_conn(move |conn| {
             let limit = query.limit.unwrap_or(100);
             let offset = query.offset.unwrap_or(0);
 
@@ -1884,7 +1884,7 @@ fn memory_to_api_json(memory: crate::mcp::types::Memory) -> serde_json::Value {
 pub async fn get_memory(State(state): State<AppState>, Path(id): Path<i64>) -> impl IntoResponse {
     let result = state
         .db
-        .with_conn(move |conn| {
+        .with_read_conn(move |conn| {
             conn.query_row(
                 "SELECT id, project_id, session_id, memory_type, title, content,
                         context, tags, confidence, is_validated, state, extracted_at
@@ -2036,7 +2036,7 @@ pub async fn get_memory_stats(
 ) -> impl IntoResponse {
     let result = state
         .db
-        .with_conn(move |conn| {
+        .with_read_conn(move |conn| {
             // Total count (excluding removed)
             let total_count: i64 = conn
                 .query_row(
@@ -2127,7 +2127,7 @@ pub async fn get_memory_tags(
 ) -> impl IntoResponse {
     let result = state
         .db
-        .with_conn(move |conn| {
+        .with_read_conn(move |conn| {
             // Get all tags from memories (stored as JSON arrays)
             let mut stmt = conn.prepare(
                 "SELECT m.tags FROM memories m
@@ -2234,7 +2234,7 @@ pub struct PendingAiSession {
 pub async fn get_pending_ai_sessions(State(state): State<AppState>) -> impl IntoResponse {
     let result = state
         .db
-        .with_conn(|conn| {
+        .with_read_conn(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT
                     s.id as session_id,
@@ -2393,7 +2393,7 @@ pub struct SessionLimitInfo {
 pub async fn get_session_limit_info(State(state): State<AppState>) -> impl IntoResponse {
     let count = state
         .db
-        .with_conn(|conn| {
+        .with_read_conn(|conn| {
             conn.query_row("SELECT COUNT(*) FROM sessions", [], |row| row.get::<_, i64>(0))
         })
         .await
@@ -2764,7 +2764,7 @@ pub async fn get_session_markers(
 ) -> impl IntoResponse {
     let result = state
         .db
-        .with_conn(move |conn| crate::ai::marker::get_markers(conn, &session_id))
+        .with_read_conn(move |conn| crate::ai::marker::get_markers(conn, &session_id))
         .await;
 
     match result {
@@ -2915,7 +2915,7 @@ pub async fn rank_project_memories(
     // Verify project exists
     let exists = state
         .db
-        .with_conn(move |conn| {
+        .with_read_conn(move |conn| {
             conn.query_row(
                 "SELECT 1 FROM projects WHERE id = ?",
                 [&project_id_clone],
@@ -2982,7 +2982,7 @@ pub async fn get_ranking_stats(
     // Verify project exists
     let exists = state
         .db
-        .with_conn(move |conn| {
+        .with_read_conn(move |conn| {
             conn.query_row(
                 "SELECT 1 FROM projects WHERE id = ?",
                 [&project_id_clone],
@@ -3075,7 +3075,7 @@ pub async fn list_project_skills(
 
     let result = state
         .db
-        .with_conn(move |conn| {
+        .with_read_conn(move |conn| {
             // First, get the total count
             let total: i64 = conn
                 .query_row(
@@ -3235,7 +3235,7 @@ pub async fn get_skill_stats(
 ) -> impl IntoResponse {
     let result = state
         .db
-        .with_conn(move |conn| {
+        .with_read_conn(move |conn| {
             let total_skills: i64 = conn
                 .query_row(
                     "SELECT COUNT(*) FROM skills WHERE project_id = ?",
