@@ -411,6 +411,22 @@ async fn store_session(
     Ok(true) // Session was stored
 }
 
+/// Check if a Claude Code folder name encodes a temp/system directory path.
+fn is_temp_directory(folder_name: &str) -> bool {
+    if folder_name == "-" {
+        return true;
+    }
+    if !folder_name.starts_with('-') {
+        return false;
+    }
+    let lower = folder_name[1..].to_lowercase();
+    lower.starts_with("private-var-folders-")
+        || lower.starts_with("var-folders-")
+        || lower.starts_with("tmp-")
+        || lower.starts_with("private-tmp-")
+        || lower == "tmp"
+}
+
 /// Get or create a project for the given session file path.
 /// If no project exists for this folder, auto-creates one with a derived name.
 fn get_or_create_project_for_path_sync(
@@ -421,6 +437,13 @@ fn get_or_create_project_for_path_sync(
 
     let folder = session_path.parent()?;
     let folder_path = folder.to_string_lossy().to_string();
+
+    // Skip temp/system directories — not real projects
+    let folder_name = folder.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    if is_temp_directory(folder_name) {
+        tracing::debug!("Skipping temp directory: {}", folder_path);
+        return None;
+    }
 
     // Try existing project first
     if let Ok(id) = conn.query_row(
