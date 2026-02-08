@@ -3,13 +3,15 @@
 //! Watches configured directories for JSONL session files,
 //! parses them with the appropriate parser, and stores results in the database.
 
+mod storage;
+
 use crate::ai::auto_trigger::AiAutoTrigger;
 use crate::ai::types::AiEvent;
 use crate::ai::AiTaskQueue;
 use crate::config::Config;
 use crate::db::Database;
 use crate::error::Result;
-use crate::parser::{get_parser, SessionParser};
+use storage::{incremental_parse, parse_session_file};
 use notify::RecursiveMode;
 use notify_debouncer_mini::{new_debouncer, DebouncedEventKind};
 use std::collections::HashMap;
@@ -82,25 +84,15 @@ impl WatcherHandle {
     }
 }
 
-/// Tracked file info within a watched directory
-#[derive(Debug, Clone)]
-struct TrackedFile {
-    path: PathBuf,
-    last_known_size: u64,
-}
-
-/// State for tracking a watched project directory
+/// A watched directory configuration
 struct WatchedDirectory {
-    project_id: String,
     folder_path: PathBuf,
     parser_type: String,
-    /// Map of file stem -> tracked file info
-    tracked_files: HashMap<String, TrackedFile>,
 }
 
 /// Internal watcher state
 struct WatcherState {
-    /// Watched directories by project_id
+    /// Watched directories by folder path
     watched: HashMap<String, WatchedDirectory>,
     /// Database connection
     db: Arc<Database>,
@@ -128,57 +120,21 @@ pub async fn start_watcher(
         return Ok(WatcherHandle { shutdown_tx });
     }
 
-    // Initialize watched directories
+    // Initialize watched directories (no pre-scan — DB stores file positions)
     let mut watched = HashMap::new();
-    for (i, (path, parser_type)) in watch_paths.iter().enumerate() {
+    for (path, parser_type) in watch_paths.iter() {
         if !path.exists() || !path.is_dir() {
             tracing::warn!("Watch path does not exist: {}", path.display());
             continue;
         }
 
-        let project_id = format!("watch_{}", i);
-        let mut tracked_files = HashMap::new();
-
-        // Scan existing files recursively
-        fn scan_dir_recursive(dir: &PathBuf, tracked: &mut HashMap<String, TrackedFile>) {
-            if let Ok(entries) = std::fs::read_dir(dir) {
-                for entry in entries.flatten() {
-                    let file_path = entry.path();
-                    if file_path.is_dir() {
-                        // Recursively scan subdirectories
-                        scan_dir_recursive(&file_path, tracked);
-                    } else if is_session_file(&file_path) {
-                        if let Some(stem) = file_path.file_stem().and_then(|s| s.to_str()) {
-                            let size = std::fs::metadata(&file_path).map(|m| m.len()).unwrap_or(0);
-                            tracked.insert(
-                                stem.to_string(),
-                                TrackedFile {
-                                    path: file_path,
-                                    last_known_size: size,
-                                },
-                            );
-                        }
-                    }
-                }
-            }
-        }
-        scan_dir_recursive(path, &mut tracked_files);
-
-        let file_count = tracked_files.len();
-        tracing::info!(
-            "Watching {} ({} existing files): {}",
-            parser_type,
-            file_count,
-            path.display()
-        );
+        tracing::info!("Watching {}: {}", parser_type, path.display());
 
         watched.insert(
-            project_id.clone(),
+            path.to_string_lossy().to_string(),
             WatchedDirectory {
-                project_id,
                 folder_path: path.clone(),
                 parser_type: parser_type.clone(),
-                tracked_files,
             },
         );
     }
@@ -210,7 +166,7 @@ pub async fn start_watcher(
             if let Ok(events) = res {
                 for event in events {
                     if event.kind == DebouncedEventKind::Any {
-                        // Send path to tokio task via channel (non-blocking)
+                            // Send path to tokio task via channel (non-blocking)
                         let _ = notify_tx.try_send(event.path.clone());
                     }
                 }
@@ -296,10 +252,12 @@ async fn handle_file_event(state: &Arc<tokio::sync::RwLock<WatcherState>>, path:
         return;
     }
 
-    // Skip agent files for now
+    // Skip agent files
     if !is_session_file(path) {
         return;
     }
+
+    tracing::debug!("Processing file event: {}", path.display());
 
     let path_str = path.to_string_lossy().to_string();
 
@@ -308,26 +266,21 @@ async fn handle_file_event(state: &Arc<tokio::sync::RwLock<WatcherState>>, path:
         None => return,
     };
 
-    let file_name = match path.file_name().and_then(|n| n.to_str()) {
-        Some(name) => name.to_string(),
-        None => return,
-    };
-
-    // Get current file size - run blocking I/O in spawn_blocking
+    // Get current file size
     let path_for_stat = path.clone();
     let new_size = match tokio::task::spawn_blocking(move || std::fs::metadata(&path_for_stat))
         .await
     {
         Ok(Ok(m)) => m.len(),
-        _ => return, // File might have been deleted or task panicked
+        _ => return, // File might have been deleted
     };
 
-    let mut state_guard = state.write().await;
+    // Read lock only — no mutation needed
+    let state_guard = state.read().await;
 
-    // Find which watched directory this file belongs to (file must be within the watched folder)
     let watched_dir = state_guard
         .watched
-        .values_mut()
+        .values()
         .find(|d| path.starts_with(&d.folder_path));
 
     let watched_dir = match watched_dir {
@@ -335,362 +288,75 @@ async fn handle_file_event(state: &Arc<tokio::sync::RwLock<WatcherState>>, path:
         None => return,
     };
 
-    let project_id = watched_dir.project_id.clone();
     let parser_type = watched_dir.parser_type.clone();
+    let db = Arc::clone(&state_guard.db);
+    let event_tx = state_guard.event_tx.clone();
+    let ai_trigger = state_guard.ai_trigger.clone();
 
-    // Check if this is an existing tracked file or a new one
-    if let Some(tracked) = watched_dir.tracked_files.get_mut(&file_stem) {
-        let previous_size = tracked.last_known_size;
+    // Drop read lock before DB queries and parsing
+    drop(state_guard);
 
-        if new_size > previous_size {
-            // File grew - update tracking
-            tracked.last_known_size = new_size;
-
-            // Check if session exists in DB before emitting event
-            // This prevents 404 errors when Desktop tries to fetch unregistered sessions
-            let db = Arc::clone(&state_guard.db);
-            let event_tx = state_guard.event_tx.clone();
-            let session_id_check = file_stem.clone();
-
-            let session_exists = db
-                .with_conn(move |conn| {
-                    conn.query_row(
-                        "SELECT 1 FROM sessions WHERE id = ?",
-                        [&session_id_check],
-                        |_| Ok(true),
-                    )
-                    .unwrap_or(false)
-                })
-                .await;
-
-            if session_exists {
-                let event = WatcherEvent::SessionChanged {
-                    session_id: file_stem.clone(),
-                    file_path: path_str.clone(),
-                    previous_size,
-                    new_size,
-                };
-                let _ = event_tx.send(event);
-                tracing::debug!(
-                    "Session file changed: {} ({} -> {} bytes)",
-                    file_stem,
-                    previous_size,
-                    new_size
-                );
-            } else {
-                tracing::debug!(
-                    "Skipping SessionChanged for unregistered session: {}",
-                    file_stem
-                );
-            }
-
-            // Drop the lock before parsing
-            drop(state_guard);
-
-            // Re-parse the file to update message count, duration, etc.
-            if let Some(message_count) =
-                parse_session_file(&db, &event_tx, &path_str, &file_stem, &parser_type).await
-            {
-                // Auto-trigger AI tasks without holding the watcher state lock
-                let ai_trigger = state.read().await.ai_trigger.clone();
-                ai_trigger.lock().await.on_session_parsed(&file_stem, message_count).await;
-            }
-            return; // Exit early since we dropped the lock
-        }
-    } else {
-        // New file - track it
-        watched_dir.tracked_files.insert(
-            file_stem.clone(),
-            TrackedFile {
-                path: path.clone(),
-                last_known_size: new_size,
-            },
-        );
-
-        // Parse the new file first, then emit NewSession only if it was stored
-        // This prevents 404 errors when Desktop tries to fetch unregistered sessions
-        let db = Arc::clone(&state_guard.db);
-        let event_tx = state_guard.event_tx.clone();
-
-        // Drop the lock before parsing
-        drop(state_guard);
-
-        tracing::debug!("New session file detected: {} in {}", file_name, project_id);
-
-        // parse_session_file will emit SessionParsed if successful
-        // NewSession event is not emitted here to avoid 404s for unregistered projects
-        if let Some(message_count) =
-            parse_session_file(&db, &event_tx, &path_str, &file_stem, &parser_type).await
-        {
-            // Auto-trigger AI tasks without holding the watcher state lock
-            let ai_trigger = state.read().await.ai_trigger.clone();
-            ai_trigger.lock().await.on_session_parsed(&file_stem, message_count).await;
-        }
-    }
-}
-
-/// Parse a session file, store in database, and return message count on success
-/// Returns Some(message_count) if session was stored, None otherwise
-async fn parse_session_file(
-    db: &Arc<Database>,
-    event_tx: &broadcast::Sender<WatcherEvent>,
-    file_path: &str,
-    session_id: &str,
-    parser_type: &str,
-) -> Option<usize> {
-    let path = PathBuf::from(file_path);
-    let file_path_owned = file_path.to_string();
-
-    // Read file content - run blocking I/O in spawn_blocking
-    let path_for_read = path.clone();
-    let content = match tokio::task::spawn_blocking(move || std::fs::read_to_string(&path_for_read))
-        .await
-    {
-        Ok(Ok(c)) => c,
-        Ok(Err(e)) => {
-            let _ = event_tx.send(WatcherEvent::Error {
-                file_path: file_path_owned,
-                error: format!("Failed to read file: {}", e),
-            });
-            return None;
-        }
-        Err(_) => {
-            let _ = event_tx.send(WatcherEvent::Error {
-                file_path: file_path_owned,
-                error: "spawn_blocking task panicked".to_string(),
-            });
-            return None;
-        }
-    };
-
-    // Get parser for this type
-    let parser = match get_parser(parser_type) {
-        Some(p) => p,
-        None => {
-            tracing::warn!("Unknown parser type: {}", parser_type);
-            return None;
-        }
-    };
-
-    // Split content into lines
-    let lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
-
-    // Parse the file
-    let result = parser.parse(&lines);
-
-    let message_count = result.events.len();
-    tracing::info!("Parsed session {}: {} messages", session_id, message_count);
-
-    // Store session in database
-    match store_session(db, file_path, session_id, parser_type, &result).await {
-        Ok(true) => {
-            // Session was stored - emit success event
-            let _ = event_tx.send(WatcherEvent::SessionParsed {
-                session_id: session_id.to_string(),
-                message_count,
-            });
-            Some(message_count)
-        }
-        Ok(false) => {
-            // Session was skipped (no matching project) - don't emit event
-            tracing::debug!("Skipped session {} - no matching project", session_id);
-            None
-        }
-        Err(e) => {
-            tracing::error!("Failed to store session {}: {}", session_id, e);
-            let _ = event_tx.send(WatcherEvent::Error {
-                file_path: file_path.to_string(),
-                error: format!("Failed to store session: {}", e),
-            });
-            None
-        }
-    }
-}
-
-/// Store a parsed session in the database
-/// Returns Ok(true) if stored, Ok(false) if skipped (no matching project), Err on failure
-async fn store_session(
-    db: &Arc<Database>,
-    file_path: &str,
-    session_id: &str,
-    parser_type: &str,
-    result: &crate::parser::ParseResult,
-) -> std::result::Result<bool, String> {
-    let now = chrono::Utc::now().to_rfc3339();
-    let path = PathBuf::from(file_path);
-
-    // Get file metadata - run blocking I/O in spawn_blocking
-    let path_for_stat = path.clone();
-    let (file_size, file_modified) = tokio::task::spawn_blocking(move || {
-        let meta = std::fs::metadata(&path_for_stat).ok();
-        let size = meta.as_ref().map(|m| m.len() as i64);
-        let modified = meta
-            .and_then(|m| m.modified().ok())
-            .map(|t| chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339());
-        (size, modified)
-    })
-    .await
-    .map_err(|e| format!("spawn_blocking failed: {}", e))?;
-
-    // Determine AI tool name
-    let ai_tool = match parser_type {
-        "claude_code" | "claude-code" => "Claude Code",
-        "openclaw" => "OpenClaw",
-        "cursor" => "Cursor",
-        _ => parser_type,
-    }
-    .to_string();
-
-    // Prepare data for database operation
-    let session_id = session_id.to_string();
-    let session_id_for_log = session_id.clone();
-    let file_path = file_path.to_string();
-    let title = result.metadata.title.clone();
-    let events_len = result.events.len() as i64;
-    let duration_ms = result.metadata.duration_ms;
-    let has_code = result.stats.has_code;
-    let has_errors = result.stats.has_errors;
-    let start_time = result.metadata.start_time.clone().unwrap_or_else(|| now.clone());
-    let events = result.events.clone();
-
-    // Run all database operations in spawn_blocking via with_conn
-    let project_id = db
+    // Query DB for this session's last known file_size, message_count, and max sequence
+    let session_id_for_query = file_stem.clone();
+    let (db_file_size, db_message_count, db_max_sequence) = db
         .with_conn(move |conn| {
-            use rusqlite::params;
-
-            // Get or create project for this folder
-            let project_id = match get_or_create_project_for_path_sync(conn, &path) {
-                Some(id) => id,
-                None => {
-                    return Ok(None);
-                }
-            };
-
-            // Insert or update session
-            conn.execute(
-                "INSERT INTO sessions (
-                    id, project_id, file_path, title, ai_tool, message_count,
-                    duration_ms, has_code, has_errors, file_size, file_modified,
-                    created_at, indexed_at
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
-                ON CONFLICT(id) DO UPDATE SET
-                    ai_tool = ?5,
-                    message_count = ?6,
-                    duration_ms = ?7,
-                    has_code = ?8,
-                    has_errors = ?9,
-                    file_size = ?10,
-                    file_modified = ?11,
-                    indexed_at = ?13",
-                params![
-                    session_id,
-                    project_id,
-                    file_path,
-                    title,
-                    ai_tool,
-                    events_len,
-                    duration_ms,
-                    has_code,
-                    has_errors,
-                    file_size,
-                    file_modified,
-                    start_time,
-                    now,
-                ],
-            )
-            .map_err(|e| format!("Failed to insert session: {}", e))?;
-
-            // Delete existing messages for this session (for re-indexing)
-            conn.execute(
-                "DELETE FROM session_messages WHERE session_id = ?",
-                params![session_id],
-            )
-            .map_err(|e| format!("Failed to delete old messages: {}", e))?;
-
-            // Insert messages
-            for event in &events {
-                conn.execute(
-                    "INSERT INTO session_messages (
-                        session_id, sequence_num, role, content_preview, search_content,
-                        has_code, has_error, has_file_changes, tool_name, tool_type, tool_summary,
-                        byte_offset, byte_length, input_tokens, output_tokens,
-                        cache_read_tokens, cache_creation_tokens, model, timestamp
-                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
-                    params![
-                        session_id,
-                        event.sequence as i64,
-                        event.role,
-                        event.content_preview,
-                        event.search_content,
-                        event.has_code,
-                        event.has_error,
-                        event.has_file_changes,
-                        event.tool_name,
-                        event.tool_type,
-                        event.tool_summary,
-                        event.byte_offset,
-                        event.byte_length,
-                        event.input_tokens,
-                        event.output_tokens,
-                        event.cache_read_tokens,
-                        event.cache_creation_tokens,
-                        event.model,
-                        event.timestamp,
-                    ],
+            let session_info = conn
+                .query_row(
+                    "SELECT COALESCE(file_size, 0), COALESCE(message_count, 0) FROM sessions WHERE id = ?",
+                    [&session_id_for_query],
+                    |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
                 )
-                .map_err(|e| format!("Failed to insert message {}: {}", event.sequence, e))?;
-            }
+                .unwrap_or((0, 0));
 
-            Ok::<Option<String>, String>(Some(project_id))
+            let max_seq: i64 = conn
+                .query_row(
+                    "SELECT COALESCE(MAX(sequence_num), -1) FROM session_messages WHERE session_id = ?",
+                    [&session_id_for_query],
+                    |row| row.get(0),
+                )
+                .unwrap_or(-1);
+
+            (session_info.0, session_info.1, max_seq)
         })
-        .await?;
+        .await;
 
-    // If no project was found, the session was skipped
-    let project_id = match project_id {
-        Some(id) => id,
-        None => return Ok(false), // Session skipped - no matching project
-    };
-
-    tracing::info!(
-        "Stored session {} with {} messages in project {}",
-        session_id_for_log,
-        events_len,
-        project_id
-    );
-
-    Ok(true) // Session was stored
-}
-
-/// Get or create a project for the given session file path.
-/// If no project exists for this folder, auto-creates one with a derived name.
-fn get_or_create_project_for_path_sync(
-    conn: &rusqlite::Connection,
-    session_path: &PathBuf,
-) -> Option<String> {
-    use rusqlite::params;
-
-    let folder = session_path.parent()?;
-    let folder_path = folder.to_string_lossy().to_string();
-
-    // Try existing project first
-    if let Ok(id) = conn.query_row(
-        "SELECT id FROM projects WHERE folder_path = ?",
-        params![folder_path],
-        |row| row.get::<_, String>(0),
-    ) {
-        return Some(id);
+    if new_size == db_file_size as u64 {
+        return; // No change
     }
 
-    // Auto-create: derive name from folder path
-    let name = crate::derive_project_name(folder);
-    let id = uuid::Uuid::new_v4().to_string();
-    conn.execute(
-        "INSERT INTO projects (id, name, folder_path, auto_sync, created_at, updated_at)
-         VALUES (?, ?, ?, 1, datetime('now'), datetime('now'))",
-        params![id, name, folder_path],
-    )
-    .ok()?;
+    // Emit SessionChanged for existing sessions that grew
+    if db_file_size > 0 && new_size > db_file_size as u64 {
+        let _ = event_tx.send(WatcherEvent::SessionChanged {
+            session_id: file_stem.clone(),
+            file_path: path_str.clone(),
+            previous_size: db_file_size as u64,
+            new_size,
+        });
+    }
 
-    tracing::info!("Auto-created project '{}' for {}", name, folder_path);
-    Some(id)
+    // Choose parse strategy
+    let message_count = if new_size < db_file_size as u64 {
+        // File was truncated — full re-parse
+        tracing::info!("File truncated for {}, full re-parse", file_stem);
+        parse_session_file(&db, &event_tx, &path_str, &file_stem, &parser_type).await
+    } else if db_file_size > 0 && db_message_count > 0 {
+        // Existing session with data — incremental parse (delta only)
+        incremental_parse(
+            &db, &event_tx, &path_str, &file_stem, &parser_type,
+            db_file_size, db_message_count, db_max_sequence,
+        )
+        .await
+    } else {
+        // New session or empty — full parse
+        parse_session_file(&db, &event_tx, &path_str, &file_stem, &parser_type).await
+    };
+
+    if let Some(count) = message_count {
+        ai_trigger
+            .lock()
+            .await
+            .on_session_parsed(&file_stem, count)
+            .await;
+    }
 }
+
