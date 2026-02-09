@@ -218,6 +218,17 @@ pub fn init_db(conn: &Connection) -> Result<()> {
         [],
     )?;
 
+    // Instance metadata table (singleton) for mDNS discovery
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS instance_metadata (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            uuid TEXT NOT NULL,
+            instance_name TEXT,
+            created_at TEXT NOT NULL
+        )",
+        [],
+    )?;
+
     // Migrations for existing databases
     run_migrations(conn)?;
 
@@ -494,6 +505,30 @@ fn init_fts_tables(conn: &Connection) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Get or create a persistent instance UUID.
+/// Generated on first startup, persists across restarts.
+pub fn get_or_create_instance_uuid(conn: &Connection) -> Result<String> {
+    let existing: std::result::Result<String, _> = conn.query_row(
+        "SELECT uuid FROM instance_metadata WHERE id = 1",
+        [],
+        |row| row.get(0),
+    );
+
+    if let Ok(uuid) = existing {
+        return Ok(uuid);
+    }
+
+    let uuid = uuid::Uuid::new_v4().to_string();
+    let now = chrono::Utc::now().to_rfc3339();
+
+    conn.execute(
+        "INSERT INTO instance_metadata (id, uuid, created_at) VALUES (1, ?, ?)",
+        rusqlite::params![uuid, now],
+    )?;
+
+    Ok(uuid)
 }
 
 #[cfg(test)]

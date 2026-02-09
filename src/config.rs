@@ -50,6 +50,16 @@ pub struct ServerConfig {
     /// Required in Authorization header if set: "Authorization: Bearer <key>"
     #[serde(default)]
     pub api_key: Option<String>,
+
+    /// Enable mDNS/Bonjour service discovery on the local network.
+    /// Auto-disabled when host is 127.0.0.1 (localhost-only).
+    #[serde(default = "default_true")]
+    pub mdns_enabled: bool,
+
+    /// Custom instance name for mDNS announcement.
+    /// If not set, uses "Yocore-{hostname}-{short_uuid}".
+    #[serde(default)]
+    pub instance_name: Option<String>,
 }
 
 fn default_port() -> u16 {
@@ -60,12 +70,25 @@ fn default_host() -> String {
     "127.0.0.1".to_string() // Localhost only - secure by default
 }
 
+impl ServerConfig {
+    /// Check if mDNS should be active based on host binding and config.
+    /// Returns false for localhost-only bindings since there's nothing to discover.
+    pub fn should_enable_mdns(&self) -> bool {
+        if self.host == "127.0.0.1" || self.host == "localhost" {
+            return false;
+        }
+        self.mdns_enabled
+    }
+}
+
 impl Default for ServerConfig {
     fn default() -> Self {
         ServerConfig {
             port: default_port(),
             host: default_host(),
             api_key: None,
+            mdns_enabled: true,
+            instance_name: None,
         }
     }
 }
