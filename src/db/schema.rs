@@ -234,7 +234,9 @@ pub fn init_db(conn: &Connection) -> Result<()> {
 fn run_migrations(conn: &Connection) -> Result<()> {
     // Add title_ai_generated column if missing (existing DBs won't have it)
     let has_column: bool = conn
-        .prepare("SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name = 'title_ai_generated'")?
+        .prepare(
+            "SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name = 'title_ai_generated'",
+        )?
         .query_row([], |row| row.get::<_, i64>(0))
         .map(|count| count > 0)?;
 
@@ -246,10 +248,7 @@ fn run_migrations(conn: &Connection) -> Result<()> {
     }
 
     // Yolo mode: all projects always sync (auto_sync = 1)
-    conn.execute(
-        "UPDATE projects SET auto_sync = 1 WHERE auto_sync = 0",
-        [],
-    )?;
+    conn.execute("UPDATE projects SET auto_sync = 1 WHERE auto_sync = 0", [])?;
 
     Ok(())
 }

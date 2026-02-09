@@ -302,7 +302,10 @@ pub async fn extract_memories(
             .await;
 
         if should_skip {
-            tracing::debug!("Session {} already extracted with no significant new content, skipping", session_id);
+            tracing::debug!(
+                "Session {} already extracted with no significant new content, skipping",
+                session_id
+            );
             return MemoryExtractionResult {
                 session_id: session_id.to_string(),
                 memories_extracted: 0,
@@ -418,10 +421,18 @@ pub async fn extract_memories(
                                 .await;
                         }
                         Ok(Err(e)) => {
-                            tracing::debug!("Embedding generation failed for memory {}: {}", memory_id, e);
+                            tracing::debug!(
+                                "Embedding generation failed for memory {}: {}",
+                                memory_id,
+                                e
+                            );
                         }
                         Err(e) => {
-                            tracing::debug!("Embedding task panicked for memory {}: {}", memory_id, e);
+                            tracing::debug!(
+                                "Embedding task panicked for memory {}: {}",
+                                memory_id,
+                                e
+                            );
                         }
                     }
                 });
@@ -510,7 +521,8 @@ mod tests {
 
     #[test]
     fn test_parse_memories_array() {
-        let response = r#"[{"type": "decision", "title": "Use React", "content": "Decided to use React"}]"#;
+        let response =
+            r#"[{"type": "decision", "title": "Use React", "content": "Decided to use React"}]"#;
         let memories = parse_memories(response).unwrap();
         assert_eq!(memories.len(), 1);
         assert_eq!(memories[0].title, "Use React");

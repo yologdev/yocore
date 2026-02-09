@@ -11,13 +11,13 @@ use crate::ai::AiTaskQueue;
 use crate::config::Config;
 use crate::db::Database;
 use crate::error::Result;
-use storage::{incremental_parse, parse_session_file};
 use notify::RecursiveMode;
 use notify_debouncer_mini::{new_debouncer, DebouncedEventKind};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
+use storage::{incremental_parse, parse_session_file};
 use tokio::sync::{broadcast, mpsc};
 
 /// Events emitted by the file watcher and other core services
@@ -55,7 +55,10 @@ pub enum WatcherEvent {
     /// Memory ranking error
     RankingError { project_id: String, error: String },
     /// Generic scheduler task started
-    SchedulerTaskStart { task_name: String, project_id: String },
+    SchedulerTaskStart {
+        task_name: String,
+        project_id: String,
+    },
     /// Generic scheduler task completed
     SchedulerTaskComplete {
         task_name: String,
@@ -166,7 +169,7 @@ pub async fn start_watcher(
             if let Ok(events) = res {
                 for event in events {
                     if event.kind == DebouncedEventKind::Any {
-                            // Send path to tokio task via channel (non-blocking)
+                        // Send path to tokio task via channel (non-blocking)
                         let _ = notify_tx.try_send(event.path.clone());
                     }
                 }
@@ -268,12 +271,11 @@ async fn handle_file_event(state: &Arc<tokio::sync::RwLock<WatcherState>>, path:
 
     // Get current file size
     let path_for_stat = path.clone();
-    let new_size = match tokio::task::spawn_blocking(move || std::fs::metadata(&path_for_stat))
-        .await
-    {
-        Ok(Ok(m)) => m.len(),
-        _ => return, // File might have been deleted
-    };
+    let new_size =
+        match tokio::task::spawn_blocking(move || std::fs::metadata(&path_for_stat)).await {
+            Ok(Ok(m)) => m.len(),
+            _ => return, // File might have been deleted
+        };
 
     // Read lock only — no mutation needed
     let state_guard = state.read().await;
@@ -342,8 +344,14 @@ async fn handle_file_event(state: &Arc<tokio::sync::RwLock<WatcherState>>, path:
     } else if db_file_size > 0 && db_message_count > 0 {
         // Existing session with data — incremental parse (delta only)
         incremental_parse(
-            &db, &event_tx, &path_str, &file_stem, &parser_type,
-            db_file_size, db_message_count, db_max_sequence,
+            &db,
+            &event_tx,
+            &path_str,
+            &file_stem,
+            &parser_type,
+            db_file_size,
+            db_message_count,
+            db_max_sequence,
         )
         .await
     } else {
@@ -359,4 +367,3 @@ async fn handle_file_event(state: &Arc<tokio::sync::RwLock<WatcherState>>, path:
             .await;
     }
 }
-

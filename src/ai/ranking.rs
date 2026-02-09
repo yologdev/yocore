@@ -32,11 +32,11 @@ impl Default for RankingConfig {
         RankingConfig {
             high_threshold: 0.7,
             min_access_for_high: 3,
-            demotion_threshold: 0.4,  // Moderate: demote below 0.4
-            removal_threshold: 0.3,   // Moderate: remove below 0.3
+            demotion_threshold: 0.4, // Moderate: demote below 0.4
+            removal_threshold: 0.3,  // Moderate: remove below 0.3
             stale_days: 90,
-            demotion_age_days: 14,    // Moderate: demote after 14 days
-            removal_age_days: 30,     // Moderate: remove after 30 days
+            demotion_age_days: 14, // Moderate: demote after 14 days
+            removal_age_days: 30,  // Moderate: remove after 30 days
         }
     }
 }
@@ -303,14 +303,8 @@ pub fn rank_project_memories(
     }
 
     // Count by type
-    let promoted = transitions
-        .iter()
-        .filter(|t| t.to_state == "high")
-        .count();
-    let demoted = transitions
-        .iter()
-        .filter(|t| t.to_state == "low")
-        .count();
+    let promoted = transitions.iter().filter(|t| t.to_state == "high").count();
+    let demoted = transitions.iter().filter(|t| t.to_state == "low").count();
     let removed = transitions
         .iter()
         .filter(|t| t.to_state == "removed")
@@ -370,10 +364,7 @@ pub fn rank_all_projects(db: &Database, batch_size: usize) -> Vec<RankingResult>
 }
 
 /// Get ranking statistics for a project without applying changes
-pub fn get_ranking_stats(
-    db: &Database,
-    project_id: &str,
-) -> Result<serde_json::Value, String> {
+pub fn get_ranking_stats(db: &Database, project_id: &str) -> Result<serde_json::Value, String> {
     let conn = db.conn();
 
     // Count by state
@@ -497,6 +488,9 @@ mod tests {
         let score = 0.2;
         let transition = determine_transition(&memory, score, &config, now);
 
-        assert!(transition.is_none(), "Validated memories should not be demoted");
+        assert!(
+            transition.is_none(),
+            "Validated memories should not be demoted"
+        );
     }
 }

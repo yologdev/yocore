@@ -207,9 +207,12 @@ fn build_phase2_prompt(messages_json: &str) -> String {
 // ============================================================================
 
 /// Read full message content from JSONL file using byte offset
-fn read_full_content(file_path: &str, byte_offset: i64, byte_length: i64) -> Result<String, String> {
-    let mut file =
-        File::open(file_path).map_err(|e| format!("Failed to open file: {}", e))?;
+fn read_full_content(
+    file_path: &str,
+    byte_offset: i64,
+    byte_length: i64,
+) -> Result<String, String> {
+    let mut file = File::open(file_path).map_err(|e| format!("Failed to open file: {}", e))?;
 
     file.seek(SeekFrom::Start(byte_offset as u64))
         .map_err(|e| format!("Failed to seek: {}", e))?;
@@ -269,10 +272,7 @@ fn summarize_content(content: &str, role: &str, has_error: bool) -> String {
 }
 
 /// Sample events for AI processing (user + assistant only, no tools/thinking)
-fn sample_events_for_ai(
-    messages: &[SessionMessage],
-    file_path: &str,
-) -> Vec<SessionMessage> {
+fn sample_events_for_ai(messages: &[SessionMessage], file_path: &str) -> Vec<SessionMessage> {
     let mut sampled = Vec::new();
 
     for msg in messages {
@@ -282,7 +282,8 @@ fn sample_events_for_ai(
 
         if is_conversation {
             if msg.role == "assistant" {
-                if let Ok(full_content) = read_full_content(file_path, msg.byte_offset, msg.byte_length)
+                if let Ok(full_content) =
+                    read_full_content(file_path, msg.byte_offset, msg.byte_length)
                 {
                     if has_thinking_block(&full_content) {
                         continue;
@@ -317,10 +318,7 @@ fn events_to_compact_json(events: &[SessionMessage], file_path: &str) -> Result<
 }
 
 /// Build dynamic chunks based on estimated token count
-fn build_dynamic_chunks(
-    sampled: &[SessionMessage],
-    max_tokens: usize,
-) -> Vec<Vec<usize>> {
+fn build_dynamic_chunks(sampled: &[SessionMessage], max_tokens: usize) -> Vec<Vec<usize>> {
     const MAX_SUMMARIZED_TOKENS: usize = 300;
     let mut chunks: Vec<Vec<usize>> = Vec::new();
     let mut current_chunk: Vec<usize> = Vec::new();
@@ -441,7 +439,10 @@ fn store_markers(
 }
 
 /// Get markers for a session from database
-pub fn get_markers(conn: &rusqlite::Connection, session_id: &str) -> Result<Vec<SessionMarker>, String> {
+pub fn get_markers(
+    conn: &rusqlite::Connection,
+    session_id: &str,
+) -> Result<Vec<SessionMarker>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT id, session_id, event_index, marker_type, label, description, created_at
@@ -532,8 +533,8 @@ async fn detect_phase2(
         }
     }
 
-    let messages_json =
-        serde_json::to_string(&labeling_messages).map_err(|e| format!("Failed to serialize: {}", e))?;
+    let messages_json = serde_json::to_string(&labeling_messages)
+        .map_err(|e| format!("Failed to serialize: {}", e))?;
 
     let prompt = build_phase2_prompt(&messages_json);
     let response = call_cli_with_prompt(&prompt, cli, 60).await?;
@@ -547,8 +548,7 @@ fn combine_phase_results(
     phase1: &Phase1Result,
     phase2: &Phase2Result,
 ) -> Vec<(MarkerType, MarkerData)> {
-    let label_map: HashMap<i32, &Phase2Label> =
-        phase2.labels.iter().map(|l| (l.idx, l)).collect();
+    let label_map: HashMap<i32, &Phase2Label> = phase2.labels.iter().map(|l| (l.idx, l)).collect();
 
     let mut markers = Vec::new();
 
@@ -640,7 +640,10 @@ pub async fn detect_markers(
 
     // Delete existing markers
     let session_id_for_delete = session_id.to_string();
-    if let Err(e) = db.with_conn(move |conn| delete_markers(conn, &session_id_for_delete)).await {
+    if let Err(e) = db
+        .with_conn(move |conn| delete_markers(conn, &session_id_for_delete))
+        .await
+    {
         eprintln!("[markers] Failed to delete old markers: {}", e);
     }
 
@@ -678,7 +681,10 @@ pub async fn detect_markers(
         .await
         .unwrap_or(0);
 
-    println!("[markers] Detected {} markers for session {}", count, session_id);
+    println!(
+        "[markers] Detected {} markers for session {}",
+        count, session_id
+    );
 
     MarkerDetectionResult {
         session_id: session_id.to_string(),

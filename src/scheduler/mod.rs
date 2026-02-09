@@ -234,10 +234,7 @@ pub fn start_scheduler(
                         result.detail
                     );
                 } else {
-                    tracing::debug!(
-                        "Scheduler: task '{}' completed (no changes)",
-                        task.name()
-                    );
+                    tracing::debug!("Scheduler: task '{}' completed (no changes)", task.name());
                 }
             }
         });

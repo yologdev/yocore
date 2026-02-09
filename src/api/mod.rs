@@ -108,7 +108,10 @@ fn create_router(state: AppState) -> Router {
         .route("/projects/:id", patch(routes::update_project))
         .route("/projects/:id", delete(routes::delete_project))
         // Project Analytics
-        .route("/projects/:id/analytics", get(routes::get_project_analytics))
+        .route(
+            "/projects/:id/analytics",
+            get(routes::get_project_analytics),
+        )
         // Sessions
         .route("/sessions", get(routes::list_sessions))
         .route("/sessions/:id", get(routes::get_session))
@@ -123,8 +126,14 @@ fn create_router(state: AppState) -> Router {
         .route("/sessions/:id/search", get(routes::search_session))
         // Session Streaming
         .route("/sessions/:id/bytes", get(routes::read_session_bytes))
-        .route("/sessions/:id/messages/append", post(routes::append_session_messages))
-        .route("/sessions/:id/agent-summary", post(routes::update_agent_summary))
+        .route(
+            "/sessions/:id/messages/append",
+            post(routes::append_session_messages),
+        )
+        .route(
+            "/sessions/:id/agent-summary",
+            post(routes::update_agent_summary),
+        )
         // Search
         .route("/search", post(routes::search))
         // Memories
@@ -139,14 +148,29 @@ fn create_router(state: AppState) -> Router {
         // Markers
         .route("/markers/:id", delete(routes::delete_marker))
         // AI Features
-        .route("/ai/sessions/:id/title", post(routes::trigger_title_generation))
-        .route("/ai/sessions/:id/memories", post(routes::trigger_memory_extraction))
-        .route("/ai/sessions/:id/skills", post(routes::trigger_skill_extraction))
-        .route("/ai/sessions/:id/markers", post(routes::trigger_marker_detection))
+        .route(
+            "/ai/sessions/:id/title",
+            post(routes::trigger_title_generation),
+        )
+        .route(
+            "/ai/sessions/:id/memories",
+            post(routes::trigger_memory_extraction),
+        )
+        .route(
+            "/ai/sessions/:id/skills",
+            post(routes::trigger_skill_extraction),
+        )
+        .route(
+            "/ai/sessions/:id/markers",
+            post(routes::trigger_marker_detection),
+        )
         .route("/ai/cli/status", get(routes::get_ai_cli_status))
         .route("/ai/pending-sessions", get(routes::get_pending_ai_sessions))
         // AI Export
-        .route("/ai/export/capabilities", get(routes::get_ai_export_capabilities))
+        .route(
+            "/ai/export/capabilities",
+            get(routes::get_ai_export_capabilities),
+        )
         .route("/ai/export/generate", post(routes::generate_ai_export))
         .route("/ai/export/chunk", post(routes::process_ai_export_chunk))
         .route("/ai/export/merge", post(routes::merge_ai_export_chunks))
@@ -174,11 +198,20 @@ fn create_router(state: AppState) -> Router {
         .route("/config/ai", put(config_routes::update_ai_config))
         .route("/config/watch", get(config_routes::list_watch_paths))
         .route("/config/watch", post(config_routes::add_watch_path))
-        .route("/config/watch/:index", delete(config_routes::remove_watch_path))
+        .route(
+            "/config/watch/:index",
+            delete(config_routes::remove_watch_path),
+        )
         // Context API (for LLM skills and hooks)
         .route("/context/project", get(context_routes::get_project_context))
-        .route("/context/session", post(context_routes::get_session_context))
-        .route("/context/recent-memories", get(context_routes::get_recent_memories))
+        .route(
+            "/context/session",
+            post(context_routes::get_session_context),
+        )
+        .route(
+            "/context/recent-memories",
+            get(context_routes::get_recent_memories),
+        )
         .route("/context/lifeboat", post(context_routes::save_lifeboat))
         .route("/context/search", post(context_routes::search_context))
         // Server-Sent Events

@@ -193,25 +193,24 @@ pub(super) async fn parse_session_file(
 
     // Read file content - run blocking I/O in spawn_blocking
     let path_for_read = path.clone();
-    let content = match tokio::task::spawn_blocking(move || std::fs::read_to_string(&path_for_read))
-        .await
-    {
-        Ok(Ok(c)) => c,
-        Ok(Err(e)) => {
-            let _ = event_tx.send(WatcherEvent::Error {
-                file_path: file_path_owned,
-                error: format!("Failed to read file: {}", e),
-            });
-            return None;
-        }
-        Err(_) => {
-            let _ = event_tx.send(WatcherEvent::Error {
-                file_path: file_path_owned,
-                error: "spawn_blocking task panicked".to_string(),
-            });
-            return None;
-        }
-    };
+    let content =
+        match tokio::task::spawn_blocking(move || std::fs::read_to_string(&path_for_read)).await {
+            Ok(Ok(c)) => c,
+            Ok(Err(e)) => {
+                let _ = event_tx.send(WatcherEvent::Error {
+                    file_path: file_path_owned,
+                    error: format!("Failed to read file: {}", e),
+                });
+                return None;
+            }
+            Err(_) => {
+                let _ = event_tx.send(WatcherEvent::Error {
+                    file_path: file_path_owned,
+                    error: "spawn_blocking task panicked".to_string(),
+                });
+                return None;
+            }
+        };
 
     // Get parser for this type
     let parser = match get_parser(parser_type) {
@@ -300,7 +299,11 @@ async fn store_session(
     let duration_ms = result.metadata.duration_ms;
     let has_code = result.stats.has_code;
     let has_errors = result.stats.has_errors;
-    let start_time = result.metadata.start_time.clone().unwrap_or_else(|| now.clone());
+    let start_time = result
+        .metadata
+        .start_time
+        .clone()
+        .unwrap_or_else(|| now.clone());
     let events = result.events.clone();
 
     // Run all database operations in spawn_blocking via with_conn

@@ -242,7 +242,8 @@ pub async fn update_project(
             params.push(Box::new(id_clone));
 
             let query = format!("UPDATE projects SET {} WHERE id = ?", updates.join(", "));
-            let params_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+            let params_refs: Vec<&dyn rusqlite::ToSql> =
+                params.iter().map(|p| p.as_ref()).collect();
 
             conn.execute(&query, params_refs.as_slice())
         })
@@ -685,7 +686,11 @@ pub async fn list_sessions(
 
             let (sql, params): (String, Vec<Box<dyn rusqlite::ToSql>>) =
                 if let Some(ref pid) = project_id {
-                    let hidden_filter = if include_hidden { "" } else { " AND is_hidden = 0" };
+                    let hidden_filter = if include_hidden {
+                        ""
+                    } else {
+                        " AND is_hidden = 0"
+                    };
                     (
                         format!(
                             "SELECT id, project_id, file_path, title, ai_tool, message_count,
@@ -698,7 +703,11 @@ pub async fn list_sessions(
                         vec![Box::new(pid.clone()), Box::new(limit), Box::new(offset)],
                     )
                 } else {
-                    let hidden_filter = if include_hidden { "" } else { " WHERE is_hidden = 0" };
+                    let hidden_filter = if include_hidden {
+                        ""
+                    } else {
+                        " WHERE is_hidden = 0"
+                    };
                     (
                         format!(
                             "SELECT id, project_id, file_path, title, ai_tool, message_count,
@@ -711,7 +720,8 @@ pub async fn list_sessions(
                     )
                 };
 
-            let params_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+            let params_refs: Vec<&dyn rusqlite::ToSql> =
+                params.iter().map(|p| p.as_ref()).collect();
 
             let mut stmt = conn.prepare(&sql)?;
             let sessions: Vec<serde_json::Value> = stmt
@@ -736,17 +746,27 @@ pub async fn list_sessions(
 
             // Get total count
             let count_sql = if let Some(ref pid) = project_id {
-                let hidden_filter = if include_hidden { "" } else { " AND is_hidden = 0" };
+                let hidden_filter = if include_hidden {
+                    ""
+                } else {
+                    " AND is_hidden = 0"
+                };
                 format!("SELECT COUNT(*) FROM sessions WHERE project_id = ?{hidden_filter}")
             } else {
-                let hidden_filter = if include_hidden { "" } else { " WHERE is_hidden = 0" };
+                let hidden_filter = if include_hidden {
+                    ""
+                } else {
+                    " WHERE is_hidden = 0"
+                };
                 format!("SELECT COUNT(*) FROM sessions{hidden_filter}")
             };
 
             let total: i64 = if let Some(ref pid) = project_id {
-                conn.query_row(&count_sql, [pid], |row| row.get(0)).unwrap_or(0)
+                conn.query_row(&count_sql, [pid], |row| row.get(0))
+                    .unwrap_or(0)
             } else {
-                conn.query_row(&count_sql, [], |row| row.get(0)).unwrap_or(0)
+                conn.query_row(&count_sql, [], |row| row.get(0))
+                    .unwrap_or(0)
             };
 
             Ok::<_, rusqlite::Error>((sessions, total))
@@ -847,7 +867,8 @@ pub async fn update_session(
 
             params.push(Box::new(id_clone));
             let query = format!("UPDATE sessions SET {} WHERE id = ?", updates.join(", "));
-            let params_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+            let params_refs: Vec<&dyn rusqlite::ToSql> =
+                params.iter().map(|p| p.as_ref()).collect();
 
             conn.execute(&query, params_refs.as_slice())
         })
@@ -991,7 +1012,13 @@ pub async fn get_message_content(
                  JOIN sessions s ON s.id = m.session_id
                  WHERE m.session_id = ? AND m.sequence_num = ?",
                 rusqlite::params![session_id, seq],
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?)),
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                },
             )
         })
         .await;
@@ -1024,7 +1051,8 @@ pub async fn get_message_content(
         let mut buffer = vec![0u8; byte_length as usize];
         file.read_exact(&mut buffer)?;
 
-        String::from_utf8(buffer).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+        String::from_utf8(buffer)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
     })
     .await;
 
@@ -1617,8 +1645,8 @@ pub async fn list_memories(
 
             if let Some(project_id_input) = query.project_id {
                 // Resolve folder-path-based ID to actual UUID
-                let resolved_id = resolve_project_id(conn, &project_id_input)
-                    .unwrap_or(project_id_input);
+                let resolved_id =
+                    resolve_project_id(conn, &project_id_input).unwrap_or(project_id_input);
                 conditions.push("project_id = ?".to_string());
                 params.push(Box::new(resolved_id));
             }
@@ -1629,7 +1657,11 @@ pub async fn list_memories(
 
             // Handle multiple memory types (OR logic)
             if let Some(memory_types) = query.memory_types {
-                let types: Vec<&str> = memory_types.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+                let types: Vec<&str> = memory_types
+                    .split(',')
+                    .map(|s| s.trim())
+                    .filter(|s| !s.is_empty())
+                    .collect();
                 if !types.is_empty() {
                     let placeholders: Vec<String> = types.iter().map(|_| "?".to_string()).collect();
                     conditions.push(format!("memory_type IN ({})", placeholders.join(",")));
@@ -1658,9 +1690,13 @@ pub async fn list_memories(
             }
 
             // Handle multiple tags (AND logic - memory must contain ALL specified tags)
-            let tags_to_filter: Option<Vec<String>> = query.tags
-                .or(query.tag.map(|t| t.to_string()))
-                .map(|t| t.split(',').map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty()).collect());
+            let tags_to_filter: Option<Vec<String>> =
+                query.tags.or(query.tag.map(|t| t.to_string())).map(|t| {
+                    t.split(',')
+                        .map(|s| s.trim().to_lowercase())
+                        .filter(|s| !s.is_empty())
+                        .collect()
+                });
 
             params.push(Box::new(limit));
             params.push(Box::new(offset));
@@ -1679,7 +1715,11 @@ pub async fn list_memories(
 
             // For tag filtering, we need a larger initial fetch if filtering by tags
             // since tag matching is done in Rust (tags are stored as JSON arrays)
-            let effective_limit = if tags_to_filter.is_some() { limit * 5 } else { limit };
+            let effective_limit = if tags_to_filter.is_some() {
+                limit * 5
+            } else {
+                limit
+            };
             let effective_offset = if tags_to_filter.is_some() { 0 } else { offset };
 
             // Update limit/offset params (they're at the end)
@@ -1699,7 +1739,8 @@ pub async fn list_memories(
                 sort_direction
             );
 
-            let params_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+            let params_refs: Vec<&dyn rusqlite::ToSql> =
+                params.iter().map(|p| p.as_ref()).collect();
             let mut stmt = conn.prepare(&sql)?;
 
             let mut memories: Vec<serde_json::Value> = stmt
@@ -1727,9 +1768,10 @@ pub async fn list_memories(
                 memories.retain(|m| {
                     let tags_str = m.get("tags").and_then(|t| t.as_str()).unwrap_or("[]");
                     // Parse JSON array
-                    let memory_tags: Vec<String> = serde_json::from_str(tags_str)
-                        .unwrap_or_default();
-                    let memory_tags_lower: Vec<String> = memory_tags.iter().map(|t| t.to_lowercase()).collect();
+                    let memory_tags: Vec<String> =
+                        serde_json::from_str(tags_str).unwrap_or_default();
+                    let memory_tags_lower: Vec<String> =
+                        memory_tags.iter().map(|t| t.to_lowercase()).collect();
                     // All filter tags must be present (AND logic)
                     filter_tags.iter().all(|ft| memory_tags_lower.contains(ft))
                 });
@@ -1819,9 +1861,7 @@ pub async fn search_memories(
 
             let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
             let memories: Vec<crate::mcp::types::Memory> = stmt
-                .query_map([&fts_query], |row| {
-                    crate::mcp::db::row_to_memory_pub(row)
-                })
+                .query_map([&fts_query], |row| crate::mcp::db::row_to_memory_pub(row))
                 .map_err(|e| e.to_string())?
                 .filter_map(|r| r.ok())
                 .collect();
@@ -1842,10 +1882,8 @@ pub async fn search_memories(
                 });
             }
 
-            let json_memories: Vec<serde_json::Value> = memories
-                .into_iter()
-                .map(memory_to_api_json)
-                .collect();
+            let json_memories: Vec<serde_json::Value> =
+                memories.into_iter().map(memory_to_api_json).collect();
             Json(serde_json::json!({ "memories": json_memories })).into_response()
         }
         Ok(Err(e)) => (
@@ -1964,7 +2002,8 @@ pub async fn update_memory(
             params.push(Box::new(id));
 
             let query = format!("UPDATE memories SET {} WHERE id = ?", updates.join(", "));
-            let params_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+            let params_refs: Vec<&dyn rusqlite::ToSql> =
+                params.iter().map(|p| p.as_ref()).collect();
 
             conn.execute(&query, params_refs.as_slice())
         })
@@ -2184,13 +2223,22 @@ use crate::ai::types::AiEvent;
 use crate::config::Config;
 
 /// Check if a specific AI feature is enabled in config.toml
-fn check_ai_feature(state: &AppState, feature: &str) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+fn check_ai_feature(
+    state: &AppState,
+    feature: &str,
+) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
     let config = Config::from_file(&state.config_path).map_err(|e| {
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() })))
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
     })?;
 
     if !config.ai.enabled {
-        return Err((StatusCode::FORBIDDEN, Json(serde_json::json!({ "error": "AI features are disabled" }))));
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": "AI features are disabled" })),
+        ));
     }
 
     let feature_enabled = match feature {
@@ -2201,7 +2249,10 @@ fn check_ai_feature(state: &AppState, feature: &str) -> Result<(), (StatusCode, 
     };
 
     if !feature_enabled {
-        return Err((StatusCode::FORBIDDEN, Json(serde_json::json!({ "error": format!("AI feature '{}' is disabled", feature) }))));
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": format!("AI feature '{}' is disabled", feature) })),
+        ));
     }
 
     Ok(())
@@ -2394,7 +2445,9 @@ pub async fn get_session_limit_info(State(state): State<AppState>) -> impl IntoR
     let count = state
         .db
         .with_read_conn(|conn| {
-            conn.query_row("SELECT COUNT(*) FROM sessions", [], |row| row.get::<_, i64>(0))
+            conn.query_row("SELECT COUNT(*) FROM sessions", [], |row| {
+                row.get::<_, i64>(0)
+            })
         })
         .await
         .unwrap_or(0);
@@ -3291,9 +3344,7 @@ pub async fn backfill_embeddings(State(state): State<AppState>) -> impl IntoResp
                  WHERE me.memory_id IS NULL AND m.state <> 'removed'",
             )?;
             let rows = stmt
-                .query_map([], |row| {
-                    Ok((row.get(0)?, row.get(1)?, row.get(2)?))
-                })?
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
                 .filter_map(|r| r.ok())
                 .collect::<Vec<_>>();
             Ok::<_, rusqlite::Error>(rows)

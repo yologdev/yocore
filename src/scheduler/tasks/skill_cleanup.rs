@@ -98,11 +98,7 @@ pub async fn execute(
                 });
             }
             Ok(Err(e)) => {
-                tracing::error!(
-                    "Skill cleanup panicked for project {}: {}",
-                    project_id,
-                    e
-                );
+                tracing::error!("Skill cleanup panicked for project {}: {}", project_id, e);
                 total_errors += 1;
                 let _ = event_tx.send(WatcherEvent::SchedulerTaskError {
                     task_name: "skill_cleanup".to_string(),
@@ -171,9 +167,9 @@ fn cleanup_project_skills(
     let mut duplicate_ids: Vec<i64> = Vec::new();
 
     for (id, name, description) in &skills {
-        let is_dup = seen.iter().any(|(_, sn, sd)| {
-            similarity::is_similar_skill(name, description, sn, sd, threshold)
-        });
+        let is_dup = seen
+            .iter()
+            .any(|(_, sn, sd)| similarity::is_similar_skill(name, description, sn, sd, threshold));
         if is_dup {
             duplicate_ids.push(*id);
         } else {
@@ -183,11 +179,8 @@ fn cleanup_project_skills(
 
     // Hard-delete duplicates (skills have no state column)
     for id in &duplicate_ids {
-        conn.execute(
-            "DELETE FROM skills WHERE id = ?",
-            rusqlite::params![id],
-        )
-        .map_err(|e| format!("Failed to delete duplicate skill {}: {}", id, e))?;
+        conn.execute("DELETE FROM skills WHERE id = ?", rusqlite::params![id])
+            .map_err(|e| format!("Failed to delete duplicate skill {}: {}", id, e))?;
 
         // Also clean up skill embeddings
         let _ = conn.execute(

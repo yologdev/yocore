@@ -152,11 +152,7 @@ async fn find_in_path(command: &str) -> Option<PathBuf> {
     #[cfg(windows)]
     let which_cmd = "where";
 
-    let output = Command::new(which_cmd)
-        .arg(command)
-        .output()
-        .await
-        .ok()?;
+    let output = Command::new(which_cmd).arg(command).output().await.ok()?;
 
     if output.status.success() {
         let path_str = String::from_utf8_lossy(&output.stdout);
@@ -170,10 +166,7 @@ async fn find_in_path(command: &str) -> Option<PathBuf> {
 /// Check CLI version
 async fn check_cli_version(path: &PathBuf) -> Option<String> {
     let output = timeout(Duration::from_secs(5), async {
-        Command::new(path)
-            .arg("--version")
-            .output()
-            .await
+        Command::new(path).arg("--version").output().await
     })
     .await
     .ok()?

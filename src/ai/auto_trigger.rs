@@ -85,7 +85,11 @@ impl AiAutoTrigger {
 
     /// Check if we should trigger extraction based on message count thresholds
     fn should_trigger_extraction(&self, session_id: &str, message_count: usize) -> bool {
-        let last_count = self.extraction_tracker.get(session_id).copied().unwrap_or(0);
+        let last_count = self
+            .extraction_tracker
+            .get(session_id)
+            .copied()
+            .unwrap_or(0);
 
         // First extraction: cross the threshold
         if last_count < EXTRACTION_THRESHOLD && message_count >= EXTRACTION_THRESHOLD {
@@ -157,7 +161,11 @@ impl AiAutoTrigger {
 
             if let Some(ref title) = result.title {
                 if let Err(e) = store_title(&db, &sid, title).await {
-                    tracing::error!("Auto-trigger: failed to store title for {}: {}", &sid[..8], e);
+                    tracing::error!(
+                        "Auto-trigger: failed to store title for {}: {}",
+                        &sid[..8],
+                        e
+                    );
                     let _ = ai_event_tx.send(AiEvent::TitleError {
                         session_id: sid,
                         error: format!("Failed to store title: {}", e),
@@ -170,7 +178,11 @@ impl AiAutoTrigger {
                     title: title.clone(),
                 });
             } else if let Some(error) = result.error {
-                tracing::warn!("Auto-trigger: title generation failed for {}: {}", &sid[..8], error);
+                tracing::warn!(
+                    "Auto-trigger: title generation failed for {}: {}",
+                    &sid[..8],
+                    error
+                );
                 let _ = ai_event_tx.send(AiEvent::TitleError {
                     session_id: sid,
                     error,
@@ -200,7 +212,11 @@ impl AiAutoTrigger {
             let result = crate::ai::extract_memories(&db, &sid, None, false).await;
 
             if let Some(error) = result.error {
-                tracing::warn!("Auto-trigger: memory extraction failed for {}: {}", &sid[..8], error);
+                tracing::warn!(
+                    "Auto-trigger: memory extraction failed for {}: {}",
+                    &sid[..8],
+                    error
+                );
                 let _ = ai_event_tx.send(AiEvent::MemoryError {
                     session_id: sid,
                     error,
@@ -240,7 +256,11 @@ impl AiAutoTrigger {
             let result = crate::ai::extract_skills(&db, &sid, None, false).await;
 
             if let Some(error) = result.error {
-                tracing::warn!("Auto-trigger: skill extraction failed for {}: {}", &sid[..8], error);
+                tracing::warn!(
+                    "Auto-trigger: skill extraction failed for {}: {}",
+                    &sid[..8],
+                    error
+                );
                 let _ = ai_event_tx.send(AiEvent::SkillError {
                     session_id: sid,
                     error,

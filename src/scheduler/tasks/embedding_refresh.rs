@@ -90,11 +90,7 @@ pub async fn execute(
                 });
             }
             Ok(Ok(Err(e))) => {
-                tracing::error!(
-                    "Embedding refresh failed for project {}: {}",
-                    project_id,
-                    e
-                );
+                tracing::error!("Embedding refresh failed for project {}: {}", project_id, e);
                 total_errors += 1;
                 let _ = event_tx.send(WatcherEvent::SchedulerTaskError {
                     task_name: "embedding_refresh".to_string(),

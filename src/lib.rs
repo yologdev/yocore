@@ -254,11 +254,7 @@ impl Core {
 
     /// Start all enabled periodic background tasks (ranking, duplicate cleanup, embedding refresh)
     pub fn start_periodic_tasks(&self) {
-        scheduler::start_scheduler(
-            self.config.clone(),
-            self.db.clone(),
-            self.event_tx.clone(),
-        );
+        scheduler::start_scheduler(self.config.clone(), self.db.clone(), self.event_tx.clone());
     }
 
     /// Get the event sender for broadcasting events
@@ -285,7 +281,10 @@ pub fn derive_project_name(folder_path: &std::path::Path) -> String {
     if dir_name.starts_with('-') {
         let original = dir_name.strip_prefix('-').unwrap_or(dir_name);
         // Reconstruct as path: /Users/yuanhao/vibedev/yolog
-        let as_path = format!("/{}", original.replacen('-', "/", original.matches('-').count()));
+        let as_path = format!(
+            "/{}",
+            original.replacen('-', "/", original.matches('-').count())
+        );
 
         // The problem: hyphens in directory names (e.g., yocore-repo) are ambiguous.
         // Solution: check if the reconstructed path actually exists on disk.

@@ -168,11 +168,7 @@ fn format_session_context(project_name: &str, result: &SessionContextResult) -> 
     output
 }
 
-fn format_recent_memories(
-    project_name: &str,
-    sessions: usize,
-    memories: &[Memory],
-) -> String {
+fn format_recent_memories(project_name: &str, sessions: usize, memories: &[Memory]) -> String {
     if memories.is_empty() {
         return format!(
             "No memories extracted from recent {} sessions in project '{}'.",
@@ -204,7 +200,10 @@ fn format_recent_memories(
 fn format_search_results(project_name: &str, query: Option<&str>, memories: &[Memory]) -> String {
     if memories.is_empty() {
         return match query {
-            Some(q) => format!("No memories found for query '{}' in project '{}'.", q, project_name),
+            Some(q) => format!(
+                "No memories found for query '{}' in project '{}'.",
+                q, project_name
+            ),
             None => format!("No memories found in project '{}'.", project_name),
         };
     }
@@ -212,11 +211,14 @@ fn format_search_results(project_name: &str, query: Option<&str>, memories: &[Me
     let mut output = match query {
         Some(q) => format!(
             "Found {} memories in project '{}' for query '{}':\n\n",
-            memories.len(), project_name, q
+            memories.len(),
+            project_name,
+            q
         ),
         None => format!(
             "Found {} memories in project '{}':\n\n",
-            memories.len(), project_name
+            memories.len(),
+            project_name
         ),
     };
 
@@ -276,23 +278,45 @@ pub async fn get_project_context(
         let mcp_db = McpDb::new(db);
         let project = resolve_project(&mcp_db, &project_path)?;
 
-        let decisions = mcp_db.get_memories_by_type(&project.id, MemoryType::Decision, 5).unwrap_or_default();
-        let facts = mcp_db.get_memories_by_type(&project.id, MemoryType::Fact, 5).unwrap_or_default();
-        let preferences = mcp_db.get_memories_by_type(&project.id, MemoryType::Preference, 5).unwrap_or_default();
-        let context_memories = mcp_db.get_memories_by_type(&project.id, MemoryType::Context, 5).unwrap_or_default();
-        let tasks = mcp_db.get_memories_by_type(&project.id, MemoryType::Task, 5).unwrap_or_default();
+        let decisions = mcp_db
+            .get_memories_by_type(&project.id, MemoryType::Decision, 5)
+            .unwrap_or_default();
+        let facts = mcp_db
+            .get_memories_by_type(&project.id, MemoryType::Fact, 5)
+            .unwrap_or_default();
+        let preferences = mcp_db
+            .get_memories_by_type(&project.id, MemoryType::Preference, 5)
+            .unwrap_or_default();
+        let context_memories = mcp_db
+            .get_memories_by_type(&project.id, MemoryType::Context, 5)
+            .unwrap_or_default();
+        let tasks = mcp_db
+            .get_memories_by_type(&project.id, MemoryType::Task, 5)
+            .unwrap_or_default();
 
-        let total = decisions.len() + facts.len() + preferences.len() + context_memories.len() + tasks.len();
+        let total = decisions.len()
+            + facts.len()
+            + preferences.len()
+            + context_memories.len()
+            + tasks.len();
 
         // Track access for all returned memories (feeds into ranking)
         let all_ids: Vec<i64> = [&decisions, &facts, &preferences, &context_memories, &tasks]
-            .iter().flat_map(|v| v.iter().map(|m| m.id)).collect();
+            .iter()
+            .flat_map(|v| v.iter().map(|m| m.id))
+            .collect();
         if !all_ids.is_empty() {
             let _ = mcp_db.track_memory_access(&all_ids);
         }
 
         let formatted = format_project_context(
-            &project.name, &decisions, &facts, &preferences, &context_memories, &tasks, total,
+            &project.name,
+            &decisions,
+            &facts,
+            &preferences,
+            &context_memories,
+            &tasks,
+            total,
         );
 
         Ok::<_, (StatusCode, serde_json::Value)>(json!({
@@ -314,7 +338,8 @@ pub async fn get_project_context(
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": e.to_string() })),
-        ).into_response(),
+        )
+            .into_response(),
     }
 }
 
@@ -333,10 +358,12 @@ pub async fn get_session_context(
 
         let session_context = mcp_db
             .get_or_create_session_context(&req.session_id, &project.id, "startup")
-            .map_err(|e| (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                json!({ "error": format!("Failed to get session context: {}", e) }),
-            ))?;
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    json!({ "error": format!("Failed to get session context: {}", e) }),
+                )
+            })?;
 
         let session_memories = mcp_db
             .get_memories_by_sessions(&[req.session_id.clone()], 20)
@@ -347,7 +374,9 @@ pub async fn get_session_context(
             .unwrap_or_default();
 
         let recent_memories = if !recent_session_ids.is_empty() {
-            mcp_db.get_memories_by_sessions(&recent_session_ids, 15).unwrap_or_default()
+            mcp_db
+                .get_memories_by_sessions(&recent_session_ids, 15)
+                .unwrap_or_default()
         } else {
             vec![]
         };
@@ -357,7 +386,8 @@ pub async fn get_session_context(
             .unwrap_or_default();
 
         // Track access
-        let all_ids: Vec<i64> = session_memories.iter()
+        let all_ids: Vec<i64> = session_memories
+            .iter()
             .chain(recent_memories.iter())
             .chain(persistent_memories.iter())
             .map(|m| m.id)
@@ -390,7 +420,8 @@ pub async fn get_session_context(
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": e.to_string() })),
-        ).into_response(),
+        )
+            .into_response(),
     }
 }
 
@@ -406,16 +437,21 @@ pub async fn get_recent_memories(
         let mcp_db = McpDb::new(db);
         let project = resolve_project(&mcp_db, &query.project_path)?;
 
-        let session_ids = mcp_db.get_recent_sessions(&project.id, query.sessions)
-            .map_err(|e| (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                json!({ "error": format!("Failed to get sessions: {}", e) }),
-            ))?;
+        let session_ids = mcp_db
+            .get_recent_sessions(&project.id, query.sessions)
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    json!({ "error": format!("Failed to get sessions: {}", e) }),
+                )
+            })?;
 
         let memories = if session_ids.is_empty() {
             vec![]
         } else {
-            mcp_db.get_memories_by_sessions(&session_ids, query.limit).unwrap_or_default()
+            mcp_db
+                .get_memories_by_sessions(&session_ids, query.limit)
+                .unwrap_or_default()
         };
 
         let formatted = format_recent_memories(&project.name, query.sessions, &memories);
@@ -434,7 +470,8 @@ pub async fn get_recent_memories(
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": e.to_string() })),
-        ).into_response(),
+        )
+            .into_response(),
     }
 }
 
@@ -449,11 +486,12 @@ pub async fn save_lifeboat(
     let result = tokio::task::spawn_blocking(move || {
         let mcp_db = McpDb::new(db);
 
-        let existing = mcp_db.get_session_context(&req.session_id)
-            .map_err(|e| (
+        let existing = mcp_db.get_session_context(&req.session_id).map_err(|e| {
+            (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 json!({ "error": format!("Database error: {}", e) }),
-            ))?;
+            )
+        })?;
 
         let existing = existing.ok_or_else(|| (
             StatusCode::NOT_FOUND,
@@ -479,11 +517,14 @@ pub async fn save_lifeboat(
             }
         });
 
-        mcp_db.save_lifeboat(&req.session_id, &summary)
-            .map_err(|e| (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                json!({ "error": format!("Failed to save lifeboat: {}", e) }),
-            ))?;
+        mcp_db
+            .save_lifeboat(&req.session_id, &summary)
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    json!({ "error": format!("Failed to save lifeboat: {}", e) }),
+                )
+            })?;
 
         Ok::<_, (StatusCode, serde_json::Value)>(json!({
             "success": true,
@@ -499,7 +540,8 @@ pub async fn save_lifeboat(
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": e.to_string() })),
-        ).into_response(),
+        )
+            .into_response(),
     }
 }
 
@@ -516,25 +558,44 @@ pub async fn search_context(
         let project = resolve_project(&mcp_db, &req.project_path)?;
 
         let memory_types: Option<Vec<MemoryType>> = req.memory_types.map(|types| {
-            types.iter().filter_map(|t| MemoryType::from_str(t)).collect()
+            types
+                .iter()
+                .filter_map(|t| MemoryType::from_str(t))
+                .collect()
         });
 
         let tag_filters = req.tags.as_deref();
 
         // Fetch more when tag filtering needed (post-query filter)
-        let fetch_limit = if tag_filters.is_some() { req.limit * 5 } else { req.limit };
+        let fetch_limit = if tag_filters.is_some() {
+            req.limit * 5
+        } else {
+            req.limit
+        };
 
         let query_str = req.query.as_deref().unwrap_or("").trim();
 
         let results = if query_str.is_empty() {
-            mcp_db.browse_memories(&project.id, memory_types.as_deref(), fetch_limit)
+            mcp_db
+                .browse_memories(&project.id, memory_types.as_deref(), fetch_limit)
                 .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, json!({ "error": e })))?
         } else {
-            match mcp_db.search_memories_hybrid(query_str, &project.id, memory_types.as_deref(), fetch_limit) {
+            match mcp_db.search_memories_hybrid(
+                query_str,
+                &project.id,
+                memory_types.as_deref(),
+                fetch_limit,
+            ) {
                 Ok(r) => r,
                 Err(e) => {
                     tracing::debug!("Hybrid search failed, falling back to FTS5: {}", e);
-                    mcp_db.search_memories_fts(query_str, &project.id, memory_types.as_deref(), fetch_limit)
+                    mcp_db
+                        .search_memories_fts(
+                            query_str,
+                            &project.id,
+                            memory_types.as_deref(),
+                            fetch_limit,
+                        )
                         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, json!({ "error": e })))?
                 }
             }
@@ -542,7 +603,8 @@ pub async fn search_context(
 
         // Apply tag filtering post-query
         let filtered: Vec<Memory> = if let Some(tags) = tag_filters {
-            results.into_iter()
+            results
+                .into_iter()
                 .filter(|m| tags.iter().all(|tag| m.tags.iter().any(|t| t == tag)))
                 .take(req.limit)
                 .collect()
@@ -556,7 +618,11 @@ pub async fn search_context(
             let _ = mcp_db.track_memory_access(&memory_ids);
         }
 
-        let query_opt = if query_str.is_empty() { None } else { Some(query_str) };
+        let query_opt = if query_str.is_empty() {
+            None
+        } else {
+            Some(query_str)
+        };
         let formatted = format_search_results(&project.name, query_opt, &filtered);
 
         Ok::<_, (StatusCode, serde_json::Value)>(json!({
@@ -573,6 +639,7 @@ pub async fn search_context(
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": e.to_string() })),
-        ).into_response(),
+        )
+            .into_response(),
     }
 }

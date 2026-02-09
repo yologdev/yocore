@@ -51,8 +51,8 @@ impl EmbeddingModel {
         // Load config
         let config_str = std::fs::read_to_string(&config_path)
             .map_err(|e| format!("Failed to read config: {}", e))?;
-        let config: Config =
-            serde_json::from_str(&config_str).map_err(|e| format!("Failed to parse config: {}", e))?;
+        let config: Config = serde_json::from_str(&config_str)
+            .map_err(|e| format!("Failed to parse config: {}", e))?;
 
         // Load tokenizer
         let tokenizer = Tokenizer::from_file(&tokenizer_path)
@@ -94,7 +94,11 @@ impl EmbeddingModel {
             .encode_batch(texts.to_vec(), true)
             .map_err(|e| format!("Tokenization failed: {}", e))?;
 
-        let max_len = encodings.iter().map(|e| e.get_ids().len()).max().unwrap_or(0);
+        let max_len = encodings
+            .iter()
+            .map(|e| e.get_ids().len())
+            .max()
+            .unwrap_or(0);
         let batch_size = texts.len();
 
         // Build padded input tensors

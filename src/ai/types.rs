@@ -11,51 +11,27 @@ pub enum AiEvent {
     /// Title generation started
     TitleStart { session_id: String },
     /// Title generation completed successfully
-    TitleComplete {
-        session_id: String,
-        title: String,
-    },
+    TitleComplete { session_id: String, title: String },
     /// Title generation failed
-    TitleError {
-        session_id: String,
-        error: String,
-    },
+    TitleError { session_id: String, error: String },
     /// Memory extraction started
     MemoryStart { session_id: String },
     /// Memory extraction completed
-    MemoryComplete {
-        session_id: String,
-        count: usize,
-    },
+    MemoryComplete { session_id: String, count: usize },
     /// Memory extraction failed
-    MemoryError {
-        session_id: String,
-        error: String,
-    },
+    MemoryError { session_id: String, error: String },
     /// Skill extraction started
     SkillStart { session_id: String },
     /// Skill extraction completed
-    SkillComplete {
-        session_id: String,
-        count: usize,
-    },
+    SkillComplete { session_id: String, count: usize },
     /// Skill extraction failed
-    SkillError {
-        session_id: String,
-        error: String,
-    },
+    SkillError { session_id: String, error: String },
     /// Marker detection started
     MarkerStart { session_id: String },
     /// Marker detection completed
-    MarkerComplete {
-        session_id: String,
-        count: usize,
-    },
+    MarkerComplete { session_id: String, count: usize },
     /// Marker detection failed
-    MarkerError {
-        session_id: String,
-        error: String,
-    },
+    MarkerError { session_id: String, error: String },
 }
 
 impl AiEvent {

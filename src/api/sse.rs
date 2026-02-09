@@ -124,9 +124,7 @@ impl From<WatcherEvent> for SseEvent {
                 session_id,
                 message_count,
             },
-            WatcherEvent::Error { file_path, error } => {
-                SseEvent::WatcherError { file_path, error }
-            }
+            WatcherEvent::Error { file_path, error } => SseEvent::WatcherError { file_path, error },
             WatcherEvent::RankingStart { project_id } => SseEvent::RankingStart { project_id },
             WatcherEvent::RankingComplete {
                 project_id,

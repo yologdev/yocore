@@ -136,7 +136,10 @@ async fn get_session_content(
                                 }
                             })
                             .unwrap_or_default();
-                        return Ok(format!("[{}] {} ← {} {}", seq, role_marker, tool, result_preview));
+                        return Ok(format!(
+                            "[{}] {} ← {} {}",
+                            seq, role_marker, tool, result_preview
+                        ));
                     }
                 }
 
@@ -170,10 +173,7 @@ async fn get_session_content(
 
         // Truncate if too long
         let content = if combined.len() > MAX_INPUT_CHARS {
-            format!(
-                "{}...\n[Content truncated]",
-                &combined[..MAX_INPUT_CHARS]
-            )
+            format!("{}...\n[Content truncated]", &combined[..MAX_INPUT_CHARS])
         } else {
             combined
         };
@@ -227,11 +227,7 @@ async fn find_similar_skill(
                 existing_desc,
                 super::similarity::SKILL_SIMILARITY_THRESHOLD,
             ) {
-                tracing::debug!(
-                    "Similar skill found: \"{}\" ≈ \"{}\"",
-                    &name,
-                    existing_name
-                );
+                tracing::debug!("Similar skill found: \"{}\" ≈ \"{}\"", &name, existing_name);
                 return Ok(Some(*id));
             }
         }
@@ -342,7 +338,10 @@ pub async fn extract_skills(
             .await;
 
         if should_skip {
-            tracing::debug!("Session {} already extracted with no significant new content, skipping", session_id);
+            tracing::debug!(
+                "Session {} already extracted with no significant new content, skipping",
+                session_id
+            );
             return SkillExtractionResult {
                 session_id: session_id.to_string(),
                 skills_extracted: 0,

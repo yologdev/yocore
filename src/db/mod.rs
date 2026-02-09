@@ -28,8 +28,9 @@ fn configure_connection(conn: &Connection) -> std::result::Result<(), rusqlite::
     conn.execute("PRAGMA foreign_keys = ON", [])?;
     let _: String = conn.query_row("PRAGMA journal_mode = WAL", [], |row| row.get(0))?;
     let _: i64 = conn.query_row("PRAGMA wal_autocheckpoint = 100", [], |row| row.get(0))?;
-    let _: i64 =
-        conn.query_row("PRAGMA journal_size_limit = 209715200", [], |row| row.get(0))?;
+    let _: i64 = conn.query_row("PRAGMA journal_size_limit = 209715200", [], |row| {
+        row.get(0)
+    })?;
     Ok(())
 }
 

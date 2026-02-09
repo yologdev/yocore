@@ -129,12 +129,7 @@ pub fn jaccard_similarity(a: &[String], b: &[String]) -> f64 {
 }
 
 /// Combined similarity with weighted title (0.6) and content (0.4)
-pub fn combined_similarity(
-    title_a: &str,
-    content_a: &str,
-    title_b: &str,
-    content_b: &str,
-) -> f64 {
+pub fn combined_similarity(title_a: &str, content_a: &str, title_b: &str, content_b: &str) -> f64 {
     let title_tokens_a = tokenize(title_a);
     let title_tokens_b = tokenize(title_b);
     let content_tokens_a = tokenize(content_a);
@@ -238,7 +233,10 @@ mod tests {
             "UTF-8 boundary causes panic in Rust string slicing",
             "String slicing by byte index panics when index falls inside multi-byte UTF-8 character boundary",
         );
-        assert!(sim >= MEMORY_SIMILARITY_THRESHOLD, "similarity {sim} should be >= {MEMORY_SIMILARITY_THRESHOLD}");
+        assert!(
+            sim >= MEMORY_SIMILARITY_THRESHOLD,
+            "similarity {sim} should be >= {MEMORY_SIMILARITY_THRESHOLD}"
+        );
     }
 
     #[test]
@@ -249,7 +247,10 @@ mod tests {
             "配置数据库连接池",
             "设置数据库连接池的参数和超时配置",
         );
-        assert!(sim >= MEMORY_SIMILARITY_THRESHOLD, "CJK similarity {sim} should be >= {MEMORY_SIMILARITY_THRESHOLD}");
+        assert!(
+            sim >= MEMORY_SIMILARITY_THRESHOLD,
+            "CJK similarity {sim} should be >= {MEMORY_SIMILARITY_THRESHOLD}"
+        );
     }
 
     #[test]
@@ -260,7 +261,10 @@ mod tests {
             "Database connection pool configuration",
             "Configure the maximum number of database connections",
         );
-        assert!(sim < MEMORY_SIMILARITY_THRESHOLD, "similarity {sim} should be < {MEMORY_SIMILARITY_THRESHOLD}");
+        assert!(
+            sim < MEMORY_SIMILARITY_THRESHOLD,
+            "similarity {sim} should be < {MEMORY_SIMILARITY_THRESHOLD}"
+        );
     }
 
     #[test]
@@ -271,7 +275,10 @@ mod tests {
             "review-pull-requests",
             "Review pull request code changes for quality and correctness",
         );
-        assert!(sim >= SKILL_SIMILARITY_THRESHOLD, "skill similarity {sim} should be >= {SKILL_SIMILARITY_THRESHOLD}");
+        assert!(
+            sim >= SKILL_SIMILARITY_THRESHOLD,
+            "skill similarity {sim} should be >= {SKILL_SIMILARITY_THRESHOLD}"
+        );
     }
 
     #[test]

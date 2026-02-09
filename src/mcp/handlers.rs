@@ -393,9 +393,15 @@ fn handle_get_project_context(arguments: Value, db: &McpDb) -> ToolCallResult {
 
     // Track access for all returned memories (feeds into ranking)
     let all_ids: Vec<i64> = [
-        &context.decisions, &context.facts, &context.preferences,
-        &context.context, &context.tasks,
-    ].iter().flat_map(|v| v.iter().map(|m| m.id)).collect();
+        &context.decisions,
+        &context.facts,
+        &context.preferences,
+        &context.context,
+        &context.tasks,
+    ]
+    .iter()
+    .flat_map(|v| v.iter().map(|m| m.id))
+    .collect();
     if !all_ids.is_empty() {
         let _ = db.track_memory_access(&all_ids);
     }

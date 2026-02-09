@@ -62,11 +62,14 @@ pub async fn get_first_messages(db: &Arc<Database>, session_id: &str) -> Result<
             .map_err(|e| e.to_string())?;
 
         let messages: Vec<String> = stmt
-            .query_map(rusqlite::params![session_id, MAX_USER_MESSAGES as i64], |row| {
-                let role: String = row.get(0)?;
-                let preview: Option<String> = row.get(1)?;
-                Ok(format!("{}: {}", role, preview.unwrap_or_default()))
-            })
+            .query_map(
+                rusqlite::params![session_id, MAX_USER_MESSAGES as i64],
+                |row| {
+                    let role: String = row.get(0)?;
+                    let preview: Option<String> = row.get(1)?;
+                    Ok(format!("{}: {}", role, preview.unwrap_or_default()))
+                },
+            )
             .map_err(|e| e.to_string())?
             .filter_map(|r| r.ok())
             .collect();
@@ -165,11 +168,7 @@ fn clean_title(raw: &str) -> String {
 }
 
 /// Store generated title in database
-pub async fn store_title(
-    db: &Arc<Database>,
-    session_id: &str,
-    title: &str,
-) -> Result<(), String> {
+pub async fn store_title(db: &Arc<Database>, session_id: &str, title: &str) -> Result<(), String> {
     let session_id = session_id.to_string();
     let title = title.to_string();
     let now = chrono::Utc::now().to_rfc3339();
@@ -196,7 +195,8 @@ mod tests {
         assert_eq!(clean_title("# Title"), "Title");
 
         // Test truncation
-        let long_title = "This is a very long title that exceeds the maximum allowed length for session titles";
+        let long_title =
+            "This is a very long title that exceeds the maximum allowed length for session titles";
         let cleaned = clean_title(long_title);
         assert!(cleaned.len() <= MAX_TITLE_LENGTH);
         assert!(cleaned.ends_with("..."));
