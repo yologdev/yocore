@@ -62,6 +62,14 @@ pub async fn serve(
 
     let app = create_router(state);
 
+    // Ensure persistent instance UUID exists (used by /health and mDNS)
+    if let Err(e) = db
+        .with_conn(crate::db::schema::get_or_create_instance_uuid)
+        .await
+    {
+        tracing::warn!("Failed to initialize instance UUID: {}", e);
+    }
+
     // Check if port is already in use (another yocore instance running)
     if tokio::net::TcpStream::connect(addr).await.is_ok() {
         tracing::error!(
