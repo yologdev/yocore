@@ -77,6 +77,7 @@ pub struct Memory {
 }
 
 /// Filters for memory queries
+#[allow(dead_code)]
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MemoryFilters {
     #[serde(default)]
@@ -96,6 +97,7 @@ pub struct MemoryFilters {
 }
 
 /// Search result with relevance score
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchResult {
     pub memory: Memory,
@@ -104,6 +106,7 @@ pub struct SearchResult {
 }
 
 /// Type of search match
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SearchMatchType {
