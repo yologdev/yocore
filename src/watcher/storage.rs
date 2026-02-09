@@ -4,7 +4,7 @@
 
 use crate::db::Database;
 use crate::parser::get_parser;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::broadcast;
 
@@ -13,6 +13,7 @@ use super::WatcherEvent;
 /// Parse only new bytes appended to a session file (delta parse).
 /// Seeks to `last_offset`, reads remaining content, parses new lines, appends to DB.
 /// Returns Some(total_message_count) on success, None on failure.
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn incremental_parse(
     db: &Arc<Database>,
     event_tx: &broadcast::Sender<WatcherEvent>,
@@ -434,7 +435,7 @@ fn is_temp_directory(folder_name: &str) -> bool {
 /// If no project exists for this folder, auto-creates one with a derived name.
 fn get_or_create_project_for_path_sync(
     conn: &rusqlite::Connection,
-    session_path: &PathBuf,
+    session_path: &Path,
 ) -> Option<String> {
     use rusqlite::params;
 

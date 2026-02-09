@@ -2,6 +2,7 @@
 //!
 //! Automatically ranks memories based on quality and usage patterns.
 //! Promotes valuable memories to `high` state and demotes/removes low-value ones.
+#![allow(deprecated)] // conn() is fine in sync code
 
 use crate::db::Database;
 use chrono::{DateTime, Utc};

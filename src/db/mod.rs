@@ -8,8 +8,8 @@
 
 pub mod schema;
 
-use crate::error::{CoreError, Result};
-use rusqlite::{params, Connection};
+use crate::error::Result;
+use rusqlite::Connection;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 

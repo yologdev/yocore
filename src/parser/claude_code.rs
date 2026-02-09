@@ -572,7 +572,7 @@ impl ClaudeCodeParser {
                     .and_then(|i| i.get("file_path"))
                     .and_then(|p| p.as_str())
                 {
-                    let file_name = path.split('/').last().unwrap_or(path);
+                    let file_name = path.split('/').next_back().unwrap_or(path);
                     if tool_output.is_some() {
                         format!("File created successfully at: {}", file_name)
                     } else {
@@ -587,7 +587,7 @@ impl ClaudeCodeParser {
                     .and_then(|i| i.get("file_path"))
                     .and_then(|p| p.as_str())
                 {
-                    let file_name = path.split('/').last().unwrap_or(path);
+                    let file_name = path.split('/').next_back().unwrap_or(path);
                     if tool_output.is_some() {
                         format!("Successfully edited {}", file_name)
                     } else {
@@ -602,7 +602,7 @@ impl ClaudeCodeParser {
                     .and_then(|i| i.get("file_path"))
                     .and_then(|p| p.as_str())
                 {
-                    let file_name = path.split('/').last().unwrap_or(path);
+                    let file_name = path.split('/').next_back().unwrap_or(path);
                     format!("Read {}", file_name)
                 } else {
                     "Reading file".to_string()
@@ -666,7 +666,7 @@ impl ClaudeCodeParser {
                     .and_then(|i| i.get("file_path"))
                     .and_then(|p| p.as_str())
                 {
-                    let file_name = path.split('/').last().unwrap_or(path);
+                    let file_name = path.split('/').next_back().unwrap_or(path);
                     if let Some(content) = input
                         .and_then(|i| i.get("content"))
                         .and_then(|c| c.as_str())
@@ -698,7 +698,7 @@ impl ClaudeCodeParser {
     fn sanitize_preview(&self, content: &str, max_len: usize) -> String {
         let sanitized = content
             // Remove ANSI escape sequences
-            .replace(|c: char| c == '\x1b', "")
+            .replace('\x1b', "")
             // Remove line number prefixes (e.g., "    3→", "  123→")
             .split('\n')
             .map(|line| {

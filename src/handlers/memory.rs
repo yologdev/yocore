@@ -1,11 +1,11 @@
 //! Memory handling logic
 
 use crate::db::Database;
-use crate::error::Result;
 use std::sync::Arc;
 
 /// Memory handler for business logic
 pub struct MemoryHandler {
+    #[allow(dead_code)]
     db: Arc<Database>,
 }
 

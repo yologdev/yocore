@@ -203,7 +203,7 @@ impl EmbeddingModel {
 /// Get or initialize the global embedding model (lazy loaded)
 pub fn get_model() -> Result<&'static EmbeddingModel, String> {
     EMBEDDING_MODEL
-        .get_or_init(|| EmbeddingModel::load())
+        .get_or_init(EmbeddingModel::load)
         .as_ref()
         .map_err(|e| e.clone())
 }

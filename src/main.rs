@@ -1,7 +1,7 @@
 //! Yocore CLI - standalone server for AI coding session management
 
 use clap::Parser;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use yocore::{Config, Core};
 
@@ -116,11 +116,11 @@ async fn main() -> anyhow::Result<()> {
 }
 
 /// Expand ~ to home directory
-fn expand_path(path: &PathBuf) -> PathBuf {
+fn expand_path(path: &Path) -> PathBuf {
     if path.starts_with("~") {
         if let Some(home) = dirs::home_dir() {
             return home.join(path.strip_prefix("~").unwrap());
         }
     }
-    path.clone()
+    path.to_path_buf()
 }

@@ -366,7 +366,7 @@ pub async fn get_session_context(
             })?;
 
         let session_memories = mcp_db
-            .get_memories_by_sessions(&[req.session_id.clone()], 20)
+            .get_memories_by_sessions(std::slice::from_ref(&req.session_id), 20)
             .unwrap_or_default();
 
         let recent_session_ids = mcp_db

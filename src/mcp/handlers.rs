@@ -548,7 +548,7 @@ fn handle_get_session_context(arguments: Value, db: &McpDb) -> ToolCallResult {
 
     // Get memories from this session
     let session_memories = db
-        .get_memories_by_sessions(&[params.session_id.clone()], 20)
+        .get_memories_by_sessions(std::slice::from_ref(&params.session_id), 20)
         .unwrap_or_default();
 
     // Get recent sessions (excluding current)

@@ -698,7 +698,7 @@ async fn process_single_chunk(
     file_path: &str,
     cli: &DetectedCli,
 ) -> Result<Vec<(MarkerType, MarkerData)>, String> {
-    let target_markers = (sampled.len() / 40).max(5).min(20);
+    let target_markers = (sampled.len() / 40).clamp(5, 20);
 
     let phase1 = detect_phase1(sampled, file_path, target_markers, cli).await?;
 
@@ -723,14 +723,13 @@ async fn process_multiple_chunks(
 
     let phase1_futures: Vec<_> = chunks
         .iter()
-        .enumerate()
-        .map(|(chunk_idx, chunk_indices)| {
+        .map(|chunk_indices| {
             let chunk: Vec<_> = chunk_indices
                 .iter()
                 .map(|&idx| sampled[idx].clone())
                 .collect();
 
-            let target_markers = (chunk.len() / 40).max(5).min(20);
+            let target_markers = (chunk.len() / 40).clamp(5, 20);
             let sem = semaphore.clone();
             let file_path = file_path.to_string();
             let cli = cli.clone();

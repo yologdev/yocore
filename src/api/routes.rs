@@ -745,7 +745,7 @@ pub async fn list_sessions(
                 .collect();
 
             // Get total count
-            let count_sql = if let Some(ref pid) = project_id {
+            let count_sql = if project_id.is_some() {
                 let hidden_filter = if include_hidden {
                     ""
                 } else {
@@ -1616,11 +1616,7 @@ fn resolve_project_id(conn: &rusqlite::Connection, project_id: &str) -> Option<S
     }
 
     // Try to find by folder_path (ending with this segment)
-    let folder_suffix = if project_id.starts_with('-') {
-        format!("/{}", project_id)
-    } else {
-        format!("/{}", project_id)
-    };
+    let folder_suffix = format!("/{}", project_id);
 
     conn.query_row(
         "SELECT id FROM projects WHERE folder_path LIKE ?",
@@ -1861,7 +1857,7 @@ pub async fn search_memories(
 
             let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
             let memories: Vec<crate::mcp::types::Memory> = stmt
-                .query_map([&fts_query], |row| crate::mcp::db::row_to_memory_pub(row))
+                .query_map([&fts_query], crate::mcp::db::row_to_memory_pub)
                 .map_err(|e| e.to_string())?
                 .filter_map(|r| r.ok())
                 .collect();
@@ -1876,7 +1872,7 @@ pub async fn search_memories(
             if !memories.is_empty() {
                 let memory_ids: Vec<i64> = memories.iter().map(|m| m.id).collect();
                 let db = state.db.clone();
-                let _ = tokio::task::spawn_blocking(move || {
+                tokio::task::spawn_blocking(move || {
                     let mcp_db = crate::mcp::db::McpDb::new(db);
                     let _ = mcp_db.track_memory_access(&memory_ids);
                 });
@@ -1906,7 +1902,7 @@ fn memory_to_api_json(memory: crate::mcp::types::Memory) -> serde_json::Value {
         "id": memory.id,
         "project_id": memory.project_id,
         "session_id": memory.session_id,
-        "memory_type": memory.memory_type.to_db_str(),
+        "memory_type": memory.memory_type.as_db_str(),
         "title": memory.title,
         "content": memory.content,
         "context": memory.context,
@@ -3167,6 +3163,7 @@ pub async fn list_project_skills(
             };
             let mut stmt = conn.prepare(&sql)?;
 
+            #[allow(clippy::type_complexity)]
             let skill_rows: Vec<(i64, String, String, String, String, String, f64, String)> = stmt
                 .query_map(rusqlite::params![project_id, limit, offset], |row| {
                     Ok((

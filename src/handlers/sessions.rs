@@ -1,11 +1,11 @@
 //! Session handling logic
 
 use crate::db::Database;
-use crate::error::Result;
 use std::sync::Arc;
 
 /// Session handler for business logic
 pub struct SessionHandler {
+    #[allow(dead_code)]
     db: Arc<Database>,
 }
 

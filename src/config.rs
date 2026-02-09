@@ -94,7 +94,7 @@ fn default_true() -> bool {
 }
 
 /// AI feature configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AiConfig {
     /// Whether AI features are enabled
     #[serde(default)]
@@ -107,16 +107,6 @@ pub struct AiConfig {
     /// AI feature toggles
     #[serde(default)]
     pub features: AiFeatures,
-}
-
-impl Default for AiConfig {
-    fn default() -> Self {
-        AiConfig {
-            enabled: false,
-            provider: None,
-            features: AiFeatures::default(),
-        }
-    }
 }
 
 /// Individual AI feature toggles

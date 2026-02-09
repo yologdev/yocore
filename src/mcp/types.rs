@@ -47,7 +47,7 @@ impl MemoryType {
     }
 
     /// Convert to database string
-    pub fn to_db_str(&self) -> &'static str {
+    pub fn as_db_str(self) -> &'static str {
         match self {
             MemoryType::Decision => "decision",
             MemoryType::Fact => "fact",
@@ -175,6 +175,7 @@ pub enum MemoryState {
 }
 
 impl MemoryState {
+    #[allow(dead_code)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "new" => Some(MemoryState::New),
@@ -186,7 +187,7 @@ impl MemoryState {
     }
 
     #[allow(dead_code)]
-    pub fn to_db_str(&self) -> &'static str {
+    pub fn as_db_str(self) -> &'static str {
         match self {
             MemoryState::New => "new",
             MemoryState::Low => "low",

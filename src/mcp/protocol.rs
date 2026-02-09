@@ -6,6 +6,7 @@ use serde_json::Value;
 /// JSON-RPC 2.0 Request
 #[derive(Debug, Clone, Deserialize)]
 pub struct JsonRpcRequest {
+    #[allow(dead_code)]
     pub jsonrpc: String,
     pub id: Value,
     pub method: String,

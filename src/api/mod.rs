@@ -63,20 +63,17 @@ pub async fn serve(
     let app = create_router(state);
 
     // Check if port is already in use (another yocore instance running)
-    match tokio::net::TcpStream::connect(addr).await {
-        Ok(_) => {
-            tracing::error!(
-                "Port {} is already in use — another yocore instance may be running. \
-                 Use `curl http://{}/health` to check.",
-                addr.port(),
-                addr
-            );
-            return Err(crate::error::CoreError::Api(format!(
-                "Port {} already in use",
-                addr.port()
-            )));
-        }
-        Err(_) => {} // Port is free, continue
+    if tokio::net::TcpStream::connect(addr).await.is_ok() {
+        tracing::error!(
+            "Port {} is already in use — another yocore instance may be running. \
+             Use `curl http://{}/health` to check.",
+            addr.port(),
+            addr
+        );
+        return Err(crate::error::CoreError::Api(format!(
+            "Port {} already in use",
+            addr.port()
+        )));
     }
 
     tracing::info!("Listening on http://{}", addr);

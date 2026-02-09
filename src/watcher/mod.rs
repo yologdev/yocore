@@ -14,7 +14,7 @@ use crate::error::Result;
 use notify::RecursiveMode;
 use notify_debouncer_mini::{new_debouncer, DebouncedEventKind};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use storage::{incremental_parse, parse_session_file};
@@ -229,7 +229,7 @@ pub async fn start_watcher(
 }
 
 /// Check if a file is a main session file (not an agent file)
-fn is_session_file(path: &PathBuf) -> bool {
+fn is_session_file(path: &Path) -> bool {
     let extension = path.extension().and_then(|e| e.to_str());
     let file_name = path.file_name().and_then(|n| n.to_str());
 
@@ -249,7 +249,7 @@ fn is_session_file(path: &PathBuf) -> bool {
 }
 
 /// Handle a file system event
-async fn handle_file_event(state: &Arc<tokio::sync::RwLock<WatcherState>>, path: &PathBuf) {
+async fn handle_file_event(state: &Arc<tokio::sync::RwLock<WatcherState>>, path: &Path) {
     // Must be a .jsonl file
     if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
         return;
@@ -270,7 +270,7 @@ async fn handle_file_event(state: &Arc<tokio::sync::RwLock<WatcherState>>, path:
     };
 
     // Get current file size
-    let path_for_stat = path.clone();
+    let path_for_stat = path.to_path_buf();
     let new_size =
         match tokio::task::spawn_blocking(move || std::fs::metadata(&path_for_stat)).await {
             Ok(Ok(m)) => m.len(),

@@ -1,5 +1,6 @@
 //! Database operations for MCP server
 //! Wraps yocore's Database with MCP-specific query methods
+#![allow(deprecated)] // conn() is fine in sync code
 
 use super::types::{Memory, MemoryType, Project, SessionContext};
 use crate::db::Database;
@@ -316,7 +317,7 @@ impl McpDb {
                     placeholders.join(", ")
                 ));
                 for t in types {
-                    params.push(Box::new(t.to_db_str().to_string()));
+                    params.push(Box::new(t.as_db_str().to_string()));
                 }
             }
         }
@@ -330,7 +331,7 @@ impl McpDb {
             .map_err(|e| format!("Failed to prepare search query: {}", e))?;
 
         let memories = stmt
-            .query_map(params_refs.as_slice(), |row| row_to_memory(row))
+            .query_map(params_refs.as_slice(), row_to_memory)
             .map_err(|e| format!("Failed to execute search: {}", e))?
             .filter_map(|r| r.ok())
             .collect();
@@ -360,8 +361,8 @@ impl McpDb {
 
         let memories = stmt
             .query_map(
-                [project_id, memory_type.to_db_str(), &limit.to_string()],
-                |row| row_to_memory(row),
+                [project_id, memory_type.as_db_str(), &limit.to_string()],
+                row_to_memory,
             )
             .map_err(|e| format!("Failed to execute query: {}", e))?
             .filter_map(|r| r.ok())
@@ -406,7 +407,7 @@ impl McpDb {
             .map_err(|e| format!("Failed to prepare query: {}", e))?;
 
         let memories = stmt
-            .query_map(params_refs.as_slice(), |row| row_to_memory(row))
+            .query_map(params_refs.as_slice(), row_to_memory)
             .map_err(|e| format!("Failed to execute query: {}", e))?
             .filter_map(|r| r.ok())
             .collect();
@@ -445,7 +446,7 @@ impl McpDb {
                     placeholders.join(", ")
                 ));
                 for t in types {
-                    params.push(Box::new(t.to_db_str().to_string()));
+                    params.push(Box::new(t.as_db_str().to_string()));
                 }
             }
         }
@@ -499,7 +500,7 @@ impl McpDb {
             .prepare(&fetch_sql)
             .map_err(|e| format!("Failed to prepare fetch: {}", e))?;
         let memories_map: HashMap<i64, Memory> = fetch_stmt
-            .query_map(fetch_refs.as_slice(), |row| row_to_memory(row))
+            .query_map(fetch_refs.as_slice(), row_to_memory)
             .map_err(|e| format!("Failed to fetch memories: {}", e))?
             .filter_map(|r| r.ok())
             .map(|m| (m.id, m))
@@ -594,7 +595,7 @@ impl McpDb {
                     placeholders.join(", ")
                 ));
                 for t in types {
-                    params.push(Box::new(t.to_db_str().to_string()));
+                    params.push(Box::new(t.as_db_str().to_string()));
                 }
             }
         }
@@ -611,7 +612,7 @@ impl McpDb {
             .map_err(|e| format!("Failed to prepare browse query: {}", e))?;
 
         let memories = stmt
-            .query_map(params_refs.as_slice(), |row| row_to_memory(row))
+            .query_map(params_refs.as_slice(), row_to_memory)
             .map_err(|e| format!("Failed to execute browse query: {}", e))?
             .filter_map(|r| r.ok())
             .collect();
@@ -639,7 +640,7 @@ impl McpDb {
             .map_err(|e| format!("Failed to prepare query: {}", e))?;
 
         let memories = stmt
-            .query_map([project_id, &limit.to_string()], |row| row_to_memory(row))
+            .query_map([project_id, &limit.to_string()], row_to_memory)
             .map_err(|e| format!("Failed to execute query: {}", e))?
             .filter_map(|r| r.ok())
             .collect();
