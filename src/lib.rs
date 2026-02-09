@@ -33,6 +33,7 @@ pub mod embeddings;
 pub mod error;
 pub mod handlers;
 pub mod mcp;
+pub mod mdns;
 pub mod parser;
 pub mod scheduler;
 pub mod watcher;

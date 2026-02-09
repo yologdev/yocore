@@ -52,7 +52,7 @@ pub async fn serve(
     ai_task_queue: AiTaskQueue,
 ) -> Result<()> {
     let state = AppState {
-        db,
+        db: db.clone(),
         api_key: config.server.api_key.clone(),
         event_tx,
         ai_event_tx,
@@ -61,6 +61,14 @@ pub async fn serve(
     };
 
     let app = create_router(state);
+
+    // Ensure persistent instance UUID exists (used by /health and mDNS)
+    if let Err(e) = db
+        .with_conn(crate::db::schema::get_or_create_instance_uuid)
+        .await
+    {
+        tracing::warn!("Failed to initialize instance UUID: {}", e);
+    }
 
     // Check if port is already in use (another yocore instance running)
     if tokio::net::TcpStream::connect(addr).await.is_ok() {
@@ -76,6 +84,27 @@ pub async fn serve(
         )));
     }
 
+    // Start mDNS service discovery if enabled
+    let _mdns_service = if config.server.should_enable_mdns() {
+        match start_mdns_service(&db, config, addr.port()).await {
+            Ok(service) => {
+                tracing::info!("mDNS service discovery enabled on local network");
+                Some(service)
+            }
+            Err(e) => {
+                tracing::warn!("mDNS discovery unavailable: {} (continuing without it)", e);
+                None
+            }
+        }
+    } else {
+        if config.server.mdns_enabled {
+            tracing::info!(
+                "mDNS disabled for localhost-only binding (set host = \"0.0.0.0\" to enable)"
+            );
+        }
+        None
+    };
+
     tracing::info!("Listening on http://{}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
@@ -83,6 +112,8 @@ pub async fn serve(
         .with_graceful_shutdown(shutdown_signal())
         .await
         .map_err(|e| crate::error::CoreError::Api(e.to_string()))?;
+
+    // _mdns_service is dropped here, which calls unregister() via Drop
 
     Ok(())
 }
@@ -228,6 +259,50 @@ fn create_router(state: AppState) -> Router {
         .layer(TraceLayer::new_for_http())
         .layer(cors)
         .with_state(state)
+}
+
+/// Start mDNS service announcement for LAN discovery.
+async fn start_mdns_service(
+    db: &Arc<Database>,
+    config: &Config,
+    port: u16,
+) -> std::result::Result<crate::mdns::MdnsService, String> {
+    // Get or create persistent instance UUID
+    let uuid = db
+        .with_conn(crate::db::schema::get_or_create_instance_uuid)
+        .await
+        .map_err(|e| format!("Failed to get instance UUID: {}", e))?;
+
+    let hostname = hostname::get()
+        .ok()
+        .and_then(|h| h.into_string().ok())
+        .unwrap_or_else(|| "unknown".to_string());
+
+    // Get project count for metadata
+    let project_count: usize = db
+        .with_read_conn(|conn| {
+            conn.query_row("SELECT COUNT(*) FROM projects", [], |row| {
+                row.get::<_, usize>(0)
+            })
+            .unwrap_or(0)
+        })
+        .await;
+
+    let instance_name = crate::mdns::generate_instance_name(
+        &hostname,
+        &uuid,
+        config.server.instance_name.as_deref(),
+    );
+
+    let metadata = crate::mdns::MdnsMetadata {
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        uuid,
+        hostname,
+        api_key_required: config.server.api_key.is_some(),
+        project_count,
+    };
+
+    crate::mdns::MdnsService::register(&instance_name, port, metadata)
 }
 
 /// Graceful shutdown signal handler

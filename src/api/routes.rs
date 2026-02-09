@@ -13,11 +13,29 @@ use serde::{Deserialize, Serialize};
 // Health Check
 // ============================================================================
 
-pub async fn health() -> impl IntoResponse {
-    Json(serde_json::json!({
+pub async fn health(State(state): State<AppState>) -> impl IntoResponse {
+    let instance_uuid: Option<String> = state
+        .db
+        .with_read_conn(|conn| {
+            conn.query_row(
+                "SELECT uuid FROM instance_metadata WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .ok()
+        })
+        .await;
+
+    let mut resp = serde_json::json!({
         "status": "ok",
         "version": env!("CARGO_PKG_VERSION")
-    }))
+    });
+
+    if let Some(uuid) = instance_uuid {
+        resp["instance_uuid"] = serde_json::Value::String(uuid);
+    }
+
+    Json(resp)
 }
 
 // ============================================================================
