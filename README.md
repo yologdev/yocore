@@ -12,6 +12,7 @@ Yocore is the core engine behind [Yolog](https://github.com/yologdev/yolog) - a 
 - **Memory System**: Extract and organize decisions, facts, preferences, and tasks
 - **HTTP API**: RESTful API for session replay, search, and memory management
 - **MCP Server**: Model Context Protocol integration for AI assistants
+- **LAN Discovery**: Automatic instance discovery via mDNS/Bonjour on the local network
 - **Lifeboat Pattern**: Session context preservation across context compaction
 
 ## Installation
@@ -57,13 +58,15 @@ yocore --mcp
 
 ### Configuration
 
-Create a config file at `~/.config/yocore/config.toml`:
+Create a config file at `~/.yolog/config.toml`:
 
 ```toml
 [server]
 port = 19420
 host = "127.0.0.1"
-# api_key = "optional-secret"  # Enable for remote access
+# api_key = "optional-secret"    # Enable for remote access
+# mdns_enabled = true            # mDNS discovery (default: true)
+# instance_name = "My Workstation"  # Custom display name for LAN discovery
 
 [database]
 path = "~/.local/share/yocore/yocore.db"
@@ -101,6 +104,77 @@ When running in MCP mode (`yocore --mcp`), the following tools are available:
 | `yolog_get_recent_memories` | Get memories from recent sessions |
 | `yolog_get_session_context` | Get session state with lifeboat pattern |
 | `yolog_save_lifeboat` | Save session state before context compaction |
+
+## LAN Discovery
+
+Yocore can announce itself on your local network via mDNS (Bonjour/Zeroconf), so the [Yolog desktop app](https://github.com/yologdev/yolog) can automatically find all running instances without manual configuration.
+
+### Enable LAN Discovery
+
+By default, yocore binds to `127.0.0.1` (localhost only) and mDNS is disabled. To enable LAN discovery, change the host to `0.0.0.0`:
+
+```toml
+[server]
+host = "0.0.0.0"
+port = 19420
+api_key = "your-secret-key"  # Recommended when exposing to the network
+```
+
+That's it — yocore will automatically announce itself as `_yocore._tcp` on the local network. The Yolog desktop app will discover it within seconds.
+
+### What Gets Advertised
+
+The mDNS announcement includes metadata so the desktop app can display instance information before connecting:
+
+| Property | Example | Description |
+|----------|---------|-------------|
+| Instance name | `Yocore-macbook-a1b2c3d4` | Auto-generated or custom display name |
+| Port | `19420` | HTTP API port |
+| `version` | `0.1.0` | Yocore version |
+| `uuid` | `84c11d21-...` | Persistent instance ID (stable across restarts) |
+| `hostname` | `macbook.local` | Machine hostname |
+| `api_key_required` | `true` / `false` | Whether auth is needed |
+| `projects` | `3` | Number of tracked projects |
+
+### Custom Instance Name
+
+By default, instances are named `Yocore-{hostname}-{short-uuid}`. You can set a friendly name:
+
+```toml
+[server]
+host = "0.0.0.0"
+instance_name = "Office Desktop"
+```
+
+### Disable mDNS
+
+If you want to expose yocore on the network but without mDNS announcement:
+
+```toml
+[server]
+host = "0.0.0.0"
+mdns_enabled = false
+```
+
+### Verify Discovery
+
+On macOS, you can verify mDNS is working:
+
+```bash
+dns-sd -B _yocore._tcp
+```
+
+### Security
+
+When exposing yocore to the network, always set an API key:
+
+```toml
+[server]
+host = "0.0.0.0"
+api_key = "your-secret-key"
+```
+
+All `/api/*` endpoints will require the key as a Bearer token. The `/health` endpoint remains public (used for discovery verification).
 
 ## Claude Code Integration
 
