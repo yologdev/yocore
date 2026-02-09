@@ -70,6 +70,17 @@ pub async fn serve(
         tracing::warn!("Failed to initialize instance UUID: {}", e);
     }
 
+    // Persist instance name from config to DB (for /health endpoint)
+    let instance_name = config.server.instance_name.clone();
+    if let Err(e) = db
+        .with_conn(move |conn| {
+            crate::db::schema::set_instance_name(conn, instance_name.as_deref())
+        })
+        .await
+    {
+        tracing::warn!("Failed to set instance name: {}", e);
+    }
+
     // Check if port is already in use (another yocore instance running)
     if tokio::net::TcpStream::connect(addr).await.is_ok() {
         tracing::error!(
@@ -300,6 +311,7 @@ async fn start_mdns_service(
         hostname,
         api_key_required: config.server.api_key.is_some(),
         project_count,
+        name: config.server.instance_name.clone(),
     };
 
     crate::mdns::MdnsService::register(&instance_name, port, metadata)

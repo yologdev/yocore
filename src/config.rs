@@ -469,6 +469,9 @@ host = "127.0.0.1"
 # If set, clients must send: Authorization: Bearer <api_key>
 # api_key = "your-secret-key"
 
+# Friendly nickname for this instance (shown in mDNS discovery)
+# instance_name = "My Mac mini"
+
 # Directories to watch for session files
 # Projects are auto-created when sessions are discovered.
 [[watch]]

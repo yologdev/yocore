@@ -14,15 +14,15 @@ use serde::{Deserialize, Serialize};
 // ============================================================================
 
 pub async fn health(State(state): State<AppState>) -> impl IntoResponse {
-    let instance_uuid: Option<String> = state
+    let (instance_uuid, instance_name): (Option<String>, Option<String>) = state
         .db
         .with_read_conn(|conn| {
             conn.query_row(
-                "SELECT uuid FROM instance_metadata WHERE id = 1",
+                "SELECT uuid, instance_name FROM instance_metadata WHERE id = 1",
                 [],
-                |row| row.get(0),
+                |row| Ok((row.get(0).ok(), row.get(1).ok())),
             )
-            .ok()
+            .unwrap_or((None, None))
         })
         .await;
 
@@ -33,6 +33,9 @@ pub async fn health(State(state): State<AppState>) -> impl IntoResponse {
 
     if let Some(uuid) = instance_uuid {
         resp["instance_uuid"] = serde_json::Value::String(uuid);
+    }
+    if let Some(name) = instance_name {
+        resp["instance_name"] = serde_json::Value::String(name);
     }
 
     Json(resp)
