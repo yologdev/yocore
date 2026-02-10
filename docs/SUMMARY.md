@@ -6,7 +6,7 @@
 
 - [Installation](getting-started/installation.md)
 - [First Run](getting-started/first-run.md)
-  - [Claude Code Integration](getting-started/claude-code-integration.md)
+  - [Long-Term Memory](getting-started/long-term-memory.md)
 
 # Reference
 

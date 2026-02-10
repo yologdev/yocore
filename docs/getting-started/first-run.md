@@ -8,7 +8,7 @@ yocore --init
 
 This creates `~/.yolog/config.toml` with sensible defaults. The config watches `~/.claude/projects` for Claude Code sessions.
 
-## Start the Server
+## Start Yocore
 
 ```bash
 yocore
@@ -20,6 +20,8 @@ Yocore starts on `http://127.0.0.1:19420` by default. On first start it:
 2. Initializes the SQLite database
 3. Starts watching configured directories for session files
 4. Starts the HTTP API server
+
+That's it — yocore watches your AI session files in the background. Any new or updated session files are automatically parsed and stored.
 
 ## Verify
 
@@ -35,15 +37,11 @@ curl http://127.0.0.1:19420/health
 }
 ```
 
-## MCP Mode
+## View Your Sessions
 
-For Claude Code integration, start in MCP mode instead:
+Use the [Yolog Desktop](https://github.com/yologdev/yolog) app to browse and replay your AI coding sessions. The desktop app connects to yocore's HTTP API and provides a full session viewer with search, filtering, and timeline visualization.
 
-```bash
-yocore --mcp
-```
-
-This runs a JSON-RPC server over stdio (no HTTP). See [Claude Code Integration](claude-code-integration.md) for setup.
+For LAN access from other machines, see [LAN Discovery](../guides/lan-discovery.md).
 
 ## Common Options
 
@@ -55,3 +53,9 @@ yocore --config /path/to/config.toml  # Custom config file
 ```
 
 See [CLI Reference](../reference/cli.md) for all options.
+
+## What's Next?
+
+- **Session replay** — Install the [Yolog Desktop](https://github.com/yologdev/yolog) app
+- **Long-term memory** — Add AI-powered memory extraction with [yoskill](long-term-memory.md) (optional)
+- **LAN access** — Share sessions across machines with [mDNS discovery](../guides/lan-discovery.md)
