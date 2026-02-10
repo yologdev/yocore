@@ -1,0 +1,21 @@
+[book]
+authors = ["Yolog Team"]
+language = "en"
+src = "docs"
+title = "Yocore Documentation"
+description = "Documentation for yocore - headless service for AI coding sessions"
+
+[build]
+build-dir = "book"
+create-missing = false
+
+[output.html]
+default-theme = "navy"
+preferred-dark-theme = "navy"
+git-repository-url = "https://github.com/yologdev/yocore"
+edit-url-template = "https://github.com/yologdev/yocore/edit/main/{path}"
+site-url = "/yocore/"
+
+[output.html.search]
+enable = true
+limit-results = 20
