@@ -1,5 +1,9 @@
 # Yocore
 
+[![CI](https://github.com/yologdev/yocore/actions/workflows/ci.yml/badge.svg)](https://github.com/yologdev/yocore/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![GitHub Release](https://img.shields.io/github/v/release/yologdev/yocore)](https://github.com/yologdev/yocore/releases)
+
 Headless service for watching, parsing, storing, and serving AI coding sessions.
 
 Yocore is the core engine behind [Yolog](https://github.com/yologdev/yolog) - a platform that archives and visualizes AI pair programming sessions from Claude Code, Cursor, and other AI coding assistants.
@@ -133,6 +137,7 @@ The mDNS announcement includes metadata so the desktop app can display instance 
 | `version` | `0.1.0` | Yocore version |
 | `uuid` | `84c11d21-...` | Persistent instance ID (stable across restarts) |
 | `hostname` | `macbook.local` | Machine hostname |
+| `name` | `Office Desktop` | Custom friendly name (if configured) |
 | `api_key_required` | `true` / `false` | Whether auth is needed |
 | `projects` | `3` | Number of tracked projects |
 
