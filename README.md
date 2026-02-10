@@ -3,6 +3,7 @@
 [![CI](https://github.com/yologdev/yocore/actions/workflows/ci.yml/badge.svg)](https://github.com/yologdev/yocore/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![GitHub Release](https://img.shields.io/github/v/release/yologdev/yocore)](https://github.com/yologdev/yocore/releases)
+[![Docs](https://img.shields.io/badge/docs-mdBook-blue)](https://yologdev.github.io/yocore/)
 
 Headless service for watching, parsing, storing, and serving AI coding sessions.
 
