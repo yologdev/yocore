@@ -1,0 +1,7 @@
+#!/bin/sh
+# Pre-commit hook: catch formatting errors before they reach CI
+
+if ! cargo fmt -- --check 2>/dev/null; then
+    echo "cargo fmt check failed. Run 'cargo fmt' to fix."
+    exit 1
+fi
