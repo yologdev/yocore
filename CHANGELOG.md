@@ -7,9 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-02-10
+
 ### Added
-- Instance nickname support in mDNS TXT records and `/health` endpoint
+- Instance nickname support in mDNS TXT records and `/health` endpoint (`instance_name` config)
 - Pre-commit hook for `cargo fmt` check
+- Release workflow skill (`/release` slash command)
+- Automated npm publishing in GitHub Actions release pipeline
+- CHANGELOG.md for tracking releases
+- README badges (CI, license, release)
+
+### Changed
+- Streamlined mDNS TXT records documentation in README
 
 ## [0.1.0] - 2026-02-02
 
