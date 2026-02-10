@@ -22,6 +22,10 @@ pub struct Config {
     #[serde(default)]
     pub ai: AiConfig,
 
+    /// Background scheduler task configuration
+    #[serde(default)]
+    pub scheduler: SchedulerConfig,
+
     /// Data directory (defaults to ~/.yolog)
     #[serde(default = "default_data_dir")]
     pub data_dir: PathBuf,
@@ -146,7 +150,11 @@ pub struct AiFeatures {
     /// Extract memories from sessions
     #[serde(default = "default_true")]
     pub memory_extraction: bool,
+}
 
+/// Background scheduler configuration
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SchedulerConfig {
     /// Memory ranking configuration
     #[serde(default)]
     pub ranking: RankingConfig,
@@ -312,10 +320,6 @@ impl Default for AiFeatures {
             title_generation: true,
             skills_discovery: true,
             memory_extraction: true,
-            ranking: RankingConfig::default(),
-            duplicate_cleanup: DuplicateCleanupConfig::default(),
-            embedding_refresh: EmbeddingRefreshConfig::default(),
-            skill_cleanup: SkillCleanupConfig::default(),
         }
     }
 }
@@ -326,6 +330,7 @@ impl Default for Config {
             server: ServerConfig::default(),
             watch: vec![],
             ai: AiConfig::default(),
+            scheduler: SchedulerConfig::default(),
             data_dir: default_data_dir(),
         }
     }
@@ -495,25 +500,29 @@ title_generation = true
 skills_discovery = true
 memory_extraction = true
 
-[ai.features.ranking]
+# Background scheduler tasks
+# These run periodically to maintain memory/skill quality.
+# Each task requires [ai] enabled + its relevant feature flag.
+
+[scheduler.ranking]
 enabled = true
 interval_hours = 6
 batch_size = 500
 
-[ai.features.duplicate_cleanup]
+[scheduler.duplicate_cleanup]
 # Retroactive duplicate memory detection and removal
 enabled = false
 interval_hours = 24
 similarity_threshold = 0.75
 batch_size = 500
 
-[ai.features.embedding_refresh]
+[scheduler.embedding_refresh]
 # Backfill embeddings for memories missing them
 enabled = true
 interval_hours = 12
 batch_size = 100
 
-[ai.features.skill_cleanup]
+[scheduler.skill_cleanup]
 # Retroactive duplicate skill detection and removal
 enabled = false
 interval_hours = 24

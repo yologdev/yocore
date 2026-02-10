@@ -58,10 +58,10 @@ When AI is enabled, yocore runs periodic background tasks:
 
 | Task | Default Interval | Config Section | Description |
 |------|-----------------|----------------|-------------|
-| Memory ranking | 6 hours | `[ai.features.ranking]` | Promotes accessed memories, demotes stale ones |
-| Embedding refresh | 12 hours | `[ai.features.embedding_refresh]` | Backfills missing vector embeddings |
-| Duplicate cleanup | 24 hours | `[ai.features.duplicate_cleanup]` | Removes similar memories (opt-in, `enabled = false` by default) |
-| Skill cleanup | 24 hours | `[ai.features.skill_cleanup]` | Removes similar skills (opt-in, `enabled = false` by default) |
+| Memory ranking | 6 hours | `[scheduler.ranking]` | Promotes accessed memories, demotes stale ones |
+| Embedding refresh | 12 hours | `[scheduler.embedding_refresh]` | Backfills missing vector embeddings |
+| Duplicate cleanup | 24 hours | `[scheduler.duplicate_cleanup]` | Removes similar memories (opt-in, `enabled = false` by default) |
+| Skill cleanup | 24 hours | `[scheduler.skill_cleanup]` | Removes similar skills (opt-in, `enabled = false` by default) |
 
 ## Concurrency
 

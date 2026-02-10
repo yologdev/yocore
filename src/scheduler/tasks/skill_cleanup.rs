@@ -21,8 +21,8 @@ pub async fn execute(
     config: &Config,
     event_tx: broadcast::Sender<WatcherEvent>,
 ) -> TaskResult {
-    let threshold = config.ai.features.skill_cleanup.similarity_threshold;
-    let batch_size = config.ai.features.skill_cleanup.batch_size;
+    let threshold = config.scheduler.skill_cleanup.similarity_threshold;
+    let batch_size = config.scheduler.skill_cleanup.batch_size;
 
     // Get all project IDs
     let db_clone = db.clone();

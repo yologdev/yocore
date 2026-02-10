@@ -86,24 +86,24 @@ impl ScheduledTask {
 
     fn is_enabled(&self, config: &Config) -> bool {
         match self {
-            ScheduledTask::Ranking => config.ai.features.ranking.enabled,
-            ScheduledTask::DuplicateCleanup => config.ai.features.duplicate_cleanup.enabled,
-            ScheduledTask::EmbeddingRefresh => config.ai.features.embedding_refresh.enabled,
-            ScheduledTask::SkillCleanup => config.ai.features.skill_cleanup.enabled,
+            ScheduledTask::Ranking => config.scheduler.ranking.enabled,
+            ScheduledTask::DuplicateCleanup => config.scheduler.duplicate_cleanup.enabled,
+            ScheduledTask::EmbeddingRefresh => config.scheduler.embedding_refresh.enabled,
+            ScheduledTask::SkillCleanup => config.scheduler.skill_cleanup.enabled,
         }
     }
 
     fn interval_secs(&self, config: &Config) -> u64 {
         match self {
-            ScheduledTask::Ranking => config.ai.features.ranking.interval_hours as u64 * 3600,
+            ScheduledTask::Ranking => config.scheduler.ranking.interval_hours as u64 * 3600,
             ScheduledTask::DuplicateCleanup => {
-                config.ai.features.duplicate_cleanup.interval_hours as u64 * 3600
+                config.scheduler.duplicate_cleanup.interval_hours as u64 * 3600
             }
             ScheduledTask::EmbeddingRefresh => {
-                config.ai.features.embedding_refresh.interval_hours as u64 * 3600
+                config.scheduler.embedding_refresh.interval_hours as u64 * 3600
             }
             ScheduledTask::SkillCleanup => {
-                config.ai.features.skill_cleanup.interval_hours as u64 * 3600
+                config.scheduler.skill_cleanup.interval_hours as u64 * 3600
             }
         }
     }

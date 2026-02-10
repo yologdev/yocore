@@ -18,7 +18,7 @@ pub async fn execute(
     config: &Config,
     event_tx: broadcast::Sender<WatcherEvent>,
 ) -> TaskResult {
-    let batch_size = config.ai.features.embedding_refresh.batch_size;
+    let batch_size = config.scheduler.embedding_refresh.batch_size;
 
     // Get all project IDs
     let db_clone = db.clone();

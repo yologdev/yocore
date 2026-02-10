@@ -45,9 +45,13 @@ Individual AI feature toggles. Only active when `ai.enabled = true`.
 | `skills_discovery` | boolean | `true` | Discover reusable skills from sessions |
 | `memory_extraction` | boolean | `true` | Extract memories (decisions, facts, etc.) |
 
-## `[ai.features.ranking]`
+## `[scheduler]`
 
-Background memory ranking — promotes frequently-accessed memories and demotes stale ones.
+Background tasks that run periodically to maintain memory and skill quality. Each task requires `[ai].enabled = true` plus its relevant feature flag.
+
+### `[scheduler.ranking]`
+
+Promotes frequently-accessed memories and demotes stale ones.
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
@@ -55,7 +59,7 @@ Background memory ranking — promotes frequently-accessed memories and demotes 
 | `interval_hours` | integer | `6` | Hours between ranking sweeps |
 | `batch_size` | integer | `500` | Memories per batch |
 
-## `[ai.features.duplicate_cleanup]`
+### `[scheduler.duplicate_cleanup]`
 
 Retroactive duplicate memory detection and removal.
 
@@ -63,10 +67,10 @@ Retroactive duplicate memory detection and removal.
 |-----|------|---------|-------------|
 | `enabled` | boolean | `false` | Enable duplicate cleanup (opt-in) |
 | `interval_hours` | integer | `24` | Hours between cleanup sweeps |
-| `similarity_threshold` | float | `0.75` | Cosine similarity threshold for duplicates |
+| `similarity_threshold` | float | `0.75` | Jaccard similarity threshold for duplicates |
 | `batch_size` | integer | `500` | Memories per batch |
 
-## `[ai.features.embedding_refresh]`
+### `[scheduler.embedding_refresh]`
 
 Backfill embeddings for memories that are missing them.
 
@@ -76,7 +80,7 @@ Backfill embeddings for memories that are missing them.
 | `interval_hours` | integer | `12` | Hours between refresh sweeps |
 | `batch_size` | integer | `100` | Memories per batch (lower — embeddings are CPU-intensive) |
 
-## `[ai.features.skill_cleanup]`
+### `[scheduler.skill_cleanup]`
 
 Retroactive duplicate skill detection and removal.
 
@@ -84,7 +88,7 @@ Retroactive duplicate skill detection and removal.
 |-----|------|---------|-------------|
 | `enabled` | boolean | `false` | Enable skill cleanup (opt-in) |
 | `interval_hours` | integer | `24` | Hours between cleanup sweeps |
-| `similarity_threshold` | float | `0.80` | Cosine similarity threshold for duplicates |
+| `similarity_threshold` | float | `0.80` | Jaccard similarity threshold for duplicates |
 | `batch_size` | integer | `500` | Skills per batch |
 
 ## Top-Level
@@ -121,23 +125,23 @@ title_generation = true
 skills_discovery = true
 memory_extraction = true
 
-[ai.features.ranking]
+[scheduler.ranking]
 enabled = true
 interval_hours = 6
 batch_size = 500
 
-[ai.features.duplicate_cleanup]
+[scheduler.duplicate_cleanup]
 enabled = false
 interval_hours = 24
 similarity_threshold = 0.75
 batch_size = 500
 
-[ai.features.embedding_refresh]
+[scheduler.embedding_refresh]
 enabled = true
 interval_hours = 12
 batch_size = 100
 
-[ai.features.skill_cleanup]
+[scheduler.skill_cleanup]
 enabled = false
 interval_hours = 24
 similarity_threshold = 0.80

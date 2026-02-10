@@ -278,22 +278,22 @@ Configure intervals and thresholds in your config:
 [ai.features]
 memory_extraction = true
 
-[ai.features.ranking]
+[scheduler.ranking]
 enabled = true
 interval_hours = 6
 batch_size = 500
 
-[ai.features.duplicate_cleanup]
+[scheduler.duplicate_cleanup]
 enabled = true
 interval_hours = 24
 similarity_threshold = 0.75
 batch_size = 500
 
-[ai.features.embedding_refresh]
+[scheduler.embedding_refresh]
 enabled = true
 interval_hours = 12
 
-[ai.features.skill_cleanup]
+[scheduler.skill_cleanup]
 enabled = true
 interval_hours = 24
 ```
