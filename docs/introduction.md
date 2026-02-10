@@ -2,7 +2,7 @@
 
 Headless service for watching, parsing, storing, and serving AI coding sessions.
 
-Yocore is the core engine behind [Yolog](https://github.com/yologdev/yolog) — a platform that archives and visualizes AI pair programming sessions from Claude Code, Cursor, and other AI coding assistants.
+Yocore is the core engine behind [Yolog](https://github.com/yologdev/support) — a platform that archives and visualizes AI pair programming sessions from Claude Code, Cursor, and other AI coding assistants.
 
 ## Features
 
@@ -20,7 +20,7 @@ Yocore is the core engine behind [Yolog](https://github.com/yologdev/yolog) — 
 | Component | Description |
 |-----------|-------------|
 | **yocore** (this) | Headless service — watches files, stores data, serves API |
-| [Yolog Desktop](https://github.com/yologdev/yolog) | GUI companion app — session replay, memory browser, dashboard |
+| [Yolog](https://github.com/yologdev/support) | GUI companion app — session replay, memory browser, dashboard |
 | [yoskill](https://github.com/yologdev/yoskill) | Claude Code skill pack — slash commands for memory system |
 
 ## Quick Links

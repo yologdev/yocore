@@ -28,12 +28,12 @@ Directories to watch for session files. This is an array — add multiple `[[wat
 
 ## `[ai]`
 
-AI feature settings. Requires `ANTHROPIC_API_KEY` environment variable.
+AI feature settings. Requires [Claude Code](https://claude.ai/code) CLI installed and authenticated.
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `enabled` | boolean | `false` | Master switch for all AI features |
-| `provider` | string | *none* | AI provider name (e.g., `"anthropic"`) |
+| `provider` | string | *none* | AI provider name (reserved for future use) |
 
 ## `[ai.features]`
 
@@ -114,7 +114,7 @@ enabled = true
 
 [ai]
 enabled = false
-# provider = "anthropic"
+# Requires Claude Code CLI installed and authenticated
 
 [ai.features]
 title_generation = true

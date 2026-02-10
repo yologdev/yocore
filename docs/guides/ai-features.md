@@ -4,14 +4,15 @@ Yocore includes AI-powered features that automatically enrich your coding sessio
 
 ## Prerequisites
 
-1. Set `ANTHROPIC_API_KEY` environment variable
+1. Have [Claude Code](https://claude.ai/code) CLI installed and authenticated (yocore spawns it as a subprocess)
 2. Enable AI in config:
 
 ```toml
 [ai]
 enabled = true
-provider = "anthropic"
 ```
+
+No API key is needed in yocore's config — it uses Claude Code's own authentication.
 
 ## Features
 

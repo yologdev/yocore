@@ -1,6 +1,6 @@
 # LAN Discovery (mDNS)
 
-Yocore can announce itself on your local network via mDNS (Bonjour/Zeroconf), so the [Yolog desktop app](https://github.com/yologdev/yolog) and other clients can automatically discover running instances.
+Yocore can announce itself on your local network via mDNS (Bonjour/Zeroconf), so the [Yolog](https://github.com/yologdev/support) and other clients can automatically discover running instances.
 
 ## Enable LAN Discovery
 

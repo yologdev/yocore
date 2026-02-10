@@ -39,7 +39,7 @@ curl http://127.0.0.1:19420/health
 
 ## View Your Sessions
 
-Use the [Yolog Desktop](https://github.com/yologdev/yolog) app to browse and replay your AI coding sessions. The desktop app connects to yocore's HTTP API and provides a full session viewer with search, filtering, and timeline visualization.
+Use the [Yolog](https://github.com/yologdev/support) app to browse and replay your AI coding sessions. It connects to yocore's HTTP API and provides a full session viewer with search, filtering, and timeline visualization.
 
 For LAN access from other machines, see [LAN Discovery](../guides/lan-discovery.md).
 
@@ -56,6 +56,6 @@ See [CLI Reference](../reference/cli.md) for all options.
 
 ## What's Next?
 
-- **Session replay** — Install the [Yolog Desktop](https://github.com/yologdev/yolog) app
+- **Session replay** — Install the [Yolog](https://github.com/yologdev/support) app
 - **Long-term memory** — Add AI-powered memory extraction with [yoskill](long-term-memory.md) (optional)
 - **LAN access** — Share sessions across machines with [mDNS discovery](../guides/lan-discovery.md)

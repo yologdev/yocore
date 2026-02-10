@@ -107,13 +107,12 @@ For memory extraction to work, enable AI in your yocore config:
 ```toml
 [ai]
 enabled = true
-provider = "anthropic"
-# ANTHROPIC_API_KEY must be set in environment
+# Requires Claude Code CLI installed and authenticated
 
 [ai.features]
 memory_extraction = true
-title_generation = true      # Optional: auto-generate session titles
-skills_discovery = true      # Optional: extract reusable skills
+title_generation = true
+skills_discovery = true
 ```
 
 ## Alternative: Raw MCP
