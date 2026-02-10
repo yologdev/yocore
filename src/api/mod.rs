@@ -73,9 +73,7 @@ pub async fn serve(
     // Persist instance name from config to DB (for /health endpoint)
     let instance_name = config.server.instance_name.clone();
     if let Err(e) = db
-        .with_conn(move |conn| {
-            crate::db::schema::set_instance_name(conn, instance_name.as_deref())
-        })
+        .with_conn(move |conn| crate::db::schema::set_instance_name(conn, instance_name.as_deref()))
         .await
     {
         tracing::warn!("Failed to set instance name: {}", e);
