@@ -10,11 +10,12 @@ build-dir = "book"
 create-missing = false
 
 [output.html]
-default-theme = "navy"
+default-theme = "light"
 preferred-dark-theme = "navy"
 git-repository-url = "https://github.com/yologdev/yocore"
 edit-url-template = "https://github.com/yologdev/yocore/edit/main/{path}"
 site-url = "/yocore/"
+additional-css = ["docs/theme/custom.css"]
 
 [output.html.search]
 enable = true

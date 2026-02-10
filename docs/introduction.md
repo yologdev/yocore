@@ -28,5 +28,6 @@ Yocore is the core engine behind [Yolog](https://github.com/yologdev/yolog) — 
 - [Installation](getting-started/installation.md) — Get yocore running in 2 minutes
 - [Configuration](reference/configuration.md) — All config options and defaults
 - [HTTP API Reference](reference/http-api.md) — Complete REST endpoint documentation
-- [MCP Tools](reference/mcp-tools.md) — AI assistant integration
+- [Long-Term Memory](getting-started/long-term-memory.md) — AI-powered memory with yoskill
+- [Memory System Deep Dive](guides/memory-system.md) — How ranking, search, and dedup work
 - [Architecture](architecture/overview.md) — How yocore works internally
