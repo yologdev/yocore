@@ -50,6 +50,7 @@ File change → notify debouncer → tokio channel → spawned parse task
 - **`mcp/`** — Stdio JSON-RPC server implementing Model Context Protocol. 7 tools for AI assistants to query memories, context, and skills.
 - **`ai/`** — AI feature modules (title generation, memory extraction, skill discovery, marker detection, ranking). Uses Claude Code CLI as subprocess. `AiTaskQueue` (semaphore) limits concurrency.
 - **`embeddings/`** — Local all-MiniLM-L6-v2 model (384-dim) via candle. Lazy-loaded on first use (`OnceLock`). Powers hybrid search (FTS5 keyword + cosine similarity).
+- **`mdns.rs`** — mDNS/Bonjour service announcement for LAN auto-discovery. Registers `_yocore._tcp.local.` with TXT metadata (version, UUID, hostname). Auto-disabled for localhost bindings. Cleanup via `Drop`.
 - **`scheduler/`** — Background tasks: memory ranking, duplicate cleanup, embedding refresh, skill cleanup. Staggered intervals, feature-flag gated.
 - **`handlers/`** — Shared business logic used by both API routes and MCP handlers.
 
@@ -66,4 +67,27 @@ TOML config at `~/.yolog/config.toml`. Key env vars: `YOLOG_DATA_DIR`, `YOLOG_SE
 
 ### Database Schema
 
-10+ tables in SQLite: `projects`, `sessions`, `session_messages`, `memories`, `memory_embeddings`, `skills`, `skill_embeddings`, `skill_sessions`, `session_markers`, `session_context`. Three FTS5 tables (`session_messages_fts`, `memories_fts`, `skills_fts`) auto-synced via triggers.
+10+ tables in SQLite: `projects`, `sessions`, `session_messages`, `memories`, `memory_embeddings`, `skills`, `skill_embeddings`, `skill_sessions`, `session_markers`, `session_context`, `instance_metadata` (singleton, stores persistent instance UUID for mDNS). Three FTS5 tables (`session_messages_fts`, `memories_fts`, `skills_fts`) auto-synced via triggers.
+
+### Yolog Memory Protocol (PROACTIVE USE REQUIRED)
+
+This project uses Yolog for persistent memory across coding sessions. Hooks handle session lifecycle automatically.
+
+**Commands (use proactively — do NOT wait for the user to ask):**
+
+| Command | When to use |
+|---------|-------------|
+| `/yo context` | At session start. When summarizing work or asked "what did we do?" |
+| `/yo memory-search <query>` | BEFORE implementing features. BEFORE answering "what did we decide about X?" |
+| `/yo memory-search tag:<name>` | Filter by tag: `tag:bug`, `tag:security`, `tag:architecture`, etc. |
+| `/yo project-search <query>` | Find past conversations: "when did we discuss X?", "how did we do X before?" |
+| `/yo project` | Before working in an unfamiliar area of the codebase |
+| `/yo memories` | When user asks about extracted memories from this session |
+
+**Rules — you MUST follow these:**
+- **ALWAYS** `/yo memory-search` BEFORE answering questions about past decisions, patterns, or conventions — do NOT rely on your own memory
+- **ALWAYS** `/yo memory-search` BEFORE implementing a feature — check if it was discussed or attempted before
+- **ALWAYS** `/yo memory-search` when debugging — past sessions may have solved the same issue
+- After compaction, context is auto-injected by hooks — no manual `/yo context` needed
+- Quote relevant memory IDs (e.g., `[#42]`) when referencing past decisions
+- `/yo update` and `/yo delete` are NEVER proactive — only when user explicitly asks

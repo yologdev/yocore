@@ -23,6 +23,8 @@ pub struct MdnsMetadata {
     pub hostname: String,
     pub api_key_required: bool,
     pub project_count: usize,
+    /// Human-friendly nickname for this instance (e.g. "My Mac mini").
+    pub name: Option<String>,
 }
 
 impl MdnsService {
@@ -53,6 +55,9 @@ impl MdnsService {
         let project_count_str = metadata.project_count.to_string();
         let mut props: Vec<(&str, &str)> = properties.to_vec();
         props.push(("projects", &project_count_str));
+        if let Some(ref name) = metadata.name {
+            props.push(("name", name));
+        }
 
         let service_info = ServiceInfo::new(
             SERVICE_TYPE,

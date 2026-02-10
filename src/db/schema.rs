@@ -531,6 +531,15 @@ pub fn get_or_create_instance_uuid(conn: &Connection) -> Result<String> {
     Ok(uuid)
 }
 
+/// Update the instance nickname in the database.
+pub fn set_instance_name(conn: &Connection, name: Option<&str>) -> Result<()> {
+    conn.execute(
+        "UPDATE instance_metadata SET instance_name = ? WHERE id = 1",
+        rusqlite::params![name],
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
