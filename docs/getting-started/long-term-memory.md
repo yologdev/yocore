@@ -107,7 +107,7 @@ For memory extraction to work, enable AI in your yocore config:
 ```toml
 [ai]
 enabled = true
-# Requires Claude Code CLI installed and authenticated
+provider = "claude_code"
 
 [ai.features]
 memory_extraction = true

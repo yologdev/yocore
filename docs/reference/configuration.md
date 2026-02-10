@@ -33,7 +33,7 @@ AI feature settings. Requires [Claude Code](https://claude.ai/code) CLI installe
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `enabled` | boolean | `false` | Master switch for all AI features |
-| `provider` | string | *none* | AI provider name (reserved for future use) |
+| `provider` | string | *none* | AI provider (e.g., `"claude_code"`). Required for AI features to work. |
 
 ## `[ai.features]`
 
@@ -114,7 +114,7 @@ enabled = true
 
 [ai]
 enabled = false
-# Requires Claude Code CLI installed and authenticated
+# provider = "claude_code"
 
 [ai.features]
 title_generation = true

@@ -123,7 +123,7 @@ pub struct AiConfig {
     #[serde(default)]
     pub enabled: bool,
 
-    /// AI provider (anthropic, openai, etc.)
+    /// AI provider ("claude_code" for CLI mode)
     #[serde(default)]
     pub provider: Option<String>,
 
@@ -488,7 +488,7 @@ enabled = true
 [ai]
 # Enable AI features (title generation, memory extraction, etc.)
 enabled = false
-# provider = "anthropic"
+# provider = "claude_code"
 
 [ai.features]
 title_generation = true
@@ -567,7 +567,7 @@ parser = "claude_code"
 
 [ai]
 enabled = true
-provider = "anthropic"
+provider = "claude_code"
 
 [ai.features]
 title_generation = true

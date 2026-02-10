@@ -10,9 +10,10 @@ Yocore includes AI-powered features that automatically enrich your coding sessio
 ```toml
 [ai]
 enabled = true
+provider = "claude_code"
 ```
 
-No API key is needed in yocore's config — it uses Claude Code's own authentication.
+No API key is needed in yocore's config — it spawns the Claude Code CLI which handles its own authentication.
 
 ## Features
 
