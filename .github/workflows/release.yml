@@ -68,3 +68,32 @@ jobs:
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  publish-npm:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Prepare npm binaries
+        run: |
+          mkdir -p npm/bin/darwin-x64 npm/bin/darwin-arm64 npm/bin/linux-x64 npm/bin/win32-x64
+          tar -xzf artifacts/yocore-darwin-x64/yocore-darwin-x64.tar.gz -C npm/bin/darwin-x64
+          tar -xzf artifacts/yocore-darwin-arm64/yocore-darwin-arm64.tar.gz -C npm/bin/darwin-arm64
+          tar -xzf artifacts/yocore-linux-x64/yocore-linux-x64.tar.gz -C npm/bin/linux-x64
+          cd npm/bin/win32-x64 && unzip ../../../artifacts/yocore-windows-x64/yocore-windows-x64.zip
+      - name: Sync version from tag
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          cd npm && npm version $VERSION --no-git-tag-version
+      - name: Publish to npm
+        run: cd npm && npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
