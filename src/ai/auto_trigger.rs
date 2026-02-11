@@ -59,14 +59,14 @@ impl AiAutoTrigger {
             }
         };
 
-        if !config.ai.enabled || config.ai.provider.is_none() {
+        if !config.is_ai_active() {
             return;
         }
 
-        let features = &config.ai.features;
-
         // Title generation: check if session needs one
-        if features.title_generation && message_count >= MIN_MESSAGES_FOR_TITLE {
+        if config.is_feature_active(crate::config::AiFeature::TitleGeneration)
+            && message_count >= MIN_MESSAGES_FOR_TITLE
+        {
             self.maybe_trigger_title(session_id).await;
         }
 
@@ -74,10 +74,10 @@ impl AiAutoTrigger {
         if self.should_trigger_extraction(session_id, message_count) {
             self.record_extraction(session_id, message_count);
 
-            if features.memory_extraction {
+            if config.is_feature_active(crate::config::AiFeature::MemoryExtraction) {
                 self.trigger_memory_extraction(session_id).await;
             }
-            if features.skills_discovery {
+            if config.is_feature_active(crate::config::AiFeature::SkillsDiscovery) {
                 self.trigger_skill_extraction(session_id).await;
             }
         }

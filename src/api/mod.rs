@@ -10,15 +10,18 @@ mod sse;
 
 use crate::ai::queue::AiTaskQueue;
 use crate::ai::types::AiEvent;
-use crate::config::Config;
+use crate::config::{Config, Storage};
 use crate::db::Database;
+use crate::ephemeral::EphemeralIndex;
 use crate::error::Result;
 use crate::watcher::WatcherEvent;
 
 use axum::{
+    http::StatusCode,
     middleware,
+    response::IntoResponse,
     routing::{delete, get, patch, post, put},
-    Router,
+    Json, Router,
 };
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -29,7 +32,12 @@ use tower_http::trace::TraceLayer;
 /// Application state shared across all handlers
 #[derive(Clone)]
 pub struct AppState {
-    pub db: Arc<Database>,
+    /// Database connection (None in ephemeral mode)
+    pub db: Option<Arc<Database>>,
+    /// Ephemeral in-memory index (None in db mode)
+    pub ephemeral: Option<Arc<EphemeralIndex>>,
+    /// Active storage mode
+    pub storage: Storage,
     pub api_key: Option<String>,
     /// Broadcast channel for SSE events from watcher
     pub event_tx: broadcast::Sender<WatcherEvent>,
@@ -42,9 +50,11 @@ pub struct AppState {
 }
 
 /// Start the HTTP API server
+#[allow(clippy::too_many_arguments)]
 pub async fn serve(
     addr: SocketAddr,
-    db: Arc<Database>,
+    db: Option<Arc<Database>>,
+    ephemeral: Option<Arc<EphemeralIndex>>,
     config: &Config,
     config_path: std::path::PathBuf,
     event_tx: broadcast::Sender<WatcherEvent>,
@@ -53,6 +63,8 @@ pub async fn serve(
 ) -> Result<()> {
     let state = AppState {
         db: db.clone(),
+        ephemeral,
+        storage: config.storage.clone(),
         api_key: config.server.api_key.clone(),
         event_tx,
         ai_event_tx,
@@ -62,21 +74,24 @@ pub async fn serve(
 
     let app = create_router(state);
 
-    // Ensure persistent instance UUID exists (used by /health and mDNS)
-    if let Err(e) = db
-        .with_conn(crate::db::schema::get_or_create_instance_uuid)
-        .await
-    {
-        tracing::warn!("Failed to initialize instance UUID: {}", e);
-    }
+    // DB-specific initialization (instance UUID, instance name)
+    if let Some(db) = &db {
+        if let Err(e) = db
+            .with_conn(crate::db::schema::get_or_create_instance_uuid)
+            .await
+        {
+            tracing::warn!("Failed to initialize instance UUID: {}", e);
+        }
 
-    // Persist instance name from config to DB (for /health endpoint)
-    let instance_name = config.server.instance_name.clone();
-    if let Err(e) = db
-        .with_conn(move |conn| crate::db::schema::set_instance_name(conn, instance_name.as_deref()))
-        .await
-    {
-        tracing::warn!("Failed to set instance name: {}", e);
+        let instance_name = config.server.instance_name.clone();
+        if let Err(e) = db
+            .with_conn(move |conn| {
+                crate::db::schema::set_instance_name(conn, instance_name.as_deref())
+            })
+            .await
+        {
+            tracing::warn!("Failed to set instance name: {}", e);
+        }
     }
 
     // Check if port is already in use (another yocore instance running)
@@ -93,9 +108,9 @@ pub async fn serve(
         )));
     }
 
-    // Start mDNS service discovery if enabled
-    let _mdns_service = if config.server.should_enable_mdns() {
-        match start_mdns_service(&db, config, addr.port()).await {
+    // Start mDNS service discovery if enabled (requires DB for persistent UUID)
+    let _mdns_service = match (&db, config.server.should_enable_mdns()) {
+        (Some(db), true) => match start_mdns_service(db, config, addr.port()).await {
             Ok(service) => {
                 tracing::info!("mDNS service discovery enabled on local network");
                 Some(service)
@@ -104,14 +119,15 @@ pub async fn serve(
                 tracing::warn!("mDNS discovery unavailable: {} (continuing without it)", e);
                 None
             }
+        },
+        _ => {
+            if config.server.mdns_enabled {
+                tracing::info!(
+                    "mDNS disabled for localhost-only binding (set host = \"0.0.0.0\" to enable)"
+                );
+            }
+            None
         }
-    } else {
-        if config.server.mdns_enabled {
-            tracing::info!(
-                "mDNS disabled for localhost-only binding (set host = \"0.0.0.0\" to enable)"
-            );
-        }
-        None
     };
 
     tracing::info!("Listening on http://{}", addr);
@@ -127,6 +143,27 @@ pub async fn serve(
     Ok(())
 }
 
+/// Middleware that rejects requests when storage != "db".
+/// Used to guard routes that require SQLite (search, memories, skills, AI, etc.).
+async fn require_db_storage(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    request: axum::http::Request<axum::body::Body>,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    if state.db.is_some() {
+        next.run(request).await
+    } else {
+        (
+            StatusCode::NOT_IMPLEMENTED,
+            Json(serde_json::json!({
+                "error": "This endpoint requires storage = \"db\"",
+                "storage": "ephemeral"
+            })),
+        )
+            .into_response()
+    }
+}
+
 /// Create the API router with all routes
 fn create_router(state: AppState) -> Router {
     // CORS configuration - allow all origins for development
@@ -135,13 +172,40 @@ fn create_router(state: AppState) -> Router {
         .allow_methods(Any)
         .allow_headers(Any);
 
-    // Protected API routes (require auth if api_key is configured)
-    let api_routes = Router::new()
-        // Projects
+    // Routes that work in both db and ephemeral modes
+    let common_routes = Router::new()
+        // Projects (list, get, resolve work in both; create/update/delete need DB)
         .route("/projects", get(routes::list_projects))
-        .route("/projects", post(routes::create_project))
         .route("/projects/resolve", get(routes::resolve_project))
         .route("/projects/:id", get(routes::get_project))
+        // Sessions (list, get work in both; update/delete need DB)
+        .route("/sessions", get(routes::list_sessions))
+        .route("/sessions/:id", get(routes::get_session))
+        .route("/sessions/:id/messages", get(routes::get_session_messages))
+        .route(
+            "/sessions/:id/messages/:seq/content",
+            get(routes::get_message_content),
+        )
+        // Session byte streaming (reads from JSONL files)
+        .route("/sessions/:id/bytes", get(routes::read_session_bytes))
+        // Config API (file-based, no DB)
+        .route("/config", get(config_routes::get_config))
+        .route("/config", put(config_routes::update_config))
+        .route("/config/ai", get(config_routes::get_ai_config))
+        .route("/config/ai", put(config_routes::update_ai_config))
+        .route("/config/watch", get(config_routes::list_watch_paths))
+        .route("/config/watch", post(config_routes::add_watch_path))
+        .route(
+            "/config/watch/:index",
+            delete(config_routes::remove_watch_path),
+        )
+        // Server-Sent Events
+        .route("/events", get(sse::events_handler));
+
+    // Routes that require storage = "db" (guarded by middleware)
+    let db_only_routes = Router::new()
+        // Projects (mutations)
+        .route("/projects", post(routes::create_project))
         .route("/projects/:id", patch(routes::update_project))
         .route("/projects/:id", delete(routes::delete_project))
         // Project Analytics
@@ -149,20 +213,12 @@ fn create_router(state: AppState) -> Router {
             "/projects/:id/analytics",
             get(routes::get_project_analytics),
         )
-        // Sessions
-        .route("/sessions", get(routes::list_sessions))
-        .route("/sessions/:id", get(routes::get_session))
+        // Sessions (mutations)
         .route("/sessions/:id", patch(routes::update_session))
         .route("/sessions/:id", delete(routes::delete_session))
-        .route("/sessions/:id/messages", get(routes::get_session_messages))
-        .route(
-            "/sessions/:id/messages/:seq/content",
-            get(routes::get_message_content),
-        )
         .route("/sessions/:id/markers", get(routes::get_session_markers))
         .route("/sessions/:id/search", get(routes::search_session))
-        // Session Streaming
-        .route("/sessions/:id/bytes", get(routes::read_session_bytes))
+        // Session mutations
         .route(
             "/sessions/:id/messages/append",
             post(routes::append_session_messages),
@@ -228,18 +284,7 @@ fn create_router(state: AppState) -> Router {
         .route("/skills/:id", delete(routes::delete_skill_by_id))
         // Embeddings
         .route("/embeddings/backfill", post(routes::backfill_embeddings))
-        // Config API
-        .route("/config", get(config_routes::get_config))
-        .route("/config", put(config_routes::update_config))
-        .route("/config/ai", get(config_routes::get_ai_config))
-        .route("/config/ai", put(config_routes::update_ai_config))
-        .route("/config/watch", get(config_routes::list_watch_paths))
-        .route("/config/watch", post(config_routes::add_watch_path))
-        .route(
-            "/config/watch/:index",
-            delete(config_routes::remove_watch_path),
-        )
-        // Context API (for LLM skills and hooks)
+        // Context API (for LLM skills and hooks — requires DB)
         .route("/context/project", get(context_routes::get_project_context))
         .route(
             "/context/session",
@@ -251,8 +296,14 @@ fn create_router(state: AppState) -> Router {
         )
         .route("/context/lifeboat", post(context_routes::save_lifeboat))
         .route("/context/search", post(context_routes::search_context))
-        // Server-Sent Events
-        .route("/events", get(sse::events_handler))
+        // Apply DB guard middleware
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            require_db_storage,
+        ));
+
+    let api_routes = common_routes
+        .merge(db_only_routes)
         // Apply auth middleware to all API routes
         .layer(middleware::from_fn_with_state(
             state.clone(),

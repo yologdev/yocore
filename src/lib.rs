@@ -30,6 +30,7 @@ pub mod api;
 pub mod config;
 pub mod db;
 pub mod embeddings;
+pub mod ephemeral;
 pub mod error;
 pub mod handlers;
 pub mod mcp;
@@ -45,6 +46,7 @@ pub use error::{CoreError, Result};
 
 use ai::queue::AiTaskQueue;
 use ai::types::AiEvent;
+use ephemeral::EphemeralIndex;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
@@ -57,8 +59,11 @@ pub struct Core {
     /// Path to config file (for config API)
     pub config_path: PathBuf,
 
-    /// Database connection
-    pub db: Arc<Database>,
+    /// Database connection (None in ephemeral mode)
+    pub db: Option<Arc<Database>>,
+
+    /// Ephemeral in-memory index (None in db mode)
+    pub ephemeral: Option<Arc<EphemeralIndex>>,
 
     /// File watcher state (optional, only when watching is active)
     watcher_handle: RwLock<Option<watcher::WatcherHandle>>,
@@ -74,18 +79,29 @@ pub struct Core {
 }
 
 impl Core {
-    /// Create a new Core instance with the given configuration
+    /// Create a new Core instance with the given configuration.
+    ///
+    /// In `db` mode, creates a SQLite database. In `ephemeral` mode, creates
+    /// an in-memory index with no persistence.
     pub fn new(config: Config, config_path: PathBuf) -> Result<Self> {
-        let db_path = config.data_dir().join("yolog.db");
-        let db = Database::new(db_path)?;
         let (event_tx, _) = broadcast::channel(256);
         let (ai_event_tx, _) = broadcast::channel(256);
         let ai_task_queue = AiTaskQueue::new(3);
 
+        let (db, ephemeral) = if config.storage.is_db() {
+            let db_path = config.data_dir().join("yolog.db");
+            let db = Database::new(db_path)?;
+            (Some(Arc::new(db)), None)
+        } else {
+            let idx = EphemeralIndex::new(config.ephemeral.clone());
+            (None, Some(Arc::new(idx)))
+        };
+
         Ok(Core {
             config,
             config_path,
-            db: Arc::new(db),
+            db,
+            ephemeral,
             watcher_handle: RwLock::new(None),
             event_tx,
             ai_event_tx,
@@ -101,7 +117,8 @@ impl Core {
         Core {
             config,
             config_path,
-            db,
+            db: Some(db),
+            ephemeral: None,
             watcher_handle: RwLock::new(None),
             event_tx,
             ai_event_tx,
@@ -111,9 +128,19 @@ impl Core {
 
     /// Start the file watcher for configured watch paths
     pub async fn start_watching(&self) -> Result<()> {
+        // Build the appropriate SessionStore based on storage mode
+        let store = if let Some(db) = &self.db {
+            Arc::new(watcher::store::SessionStore::Db(db.clone()))
+        } else if let Some(idx) = &self.ephemeral {
+            Arc::new(watcher::store::SessionStore::Ephemeral(idx.clone()))
+        } else {
+            return Err(CoreError::Config("No storage backend configured".into()));
+        };
+
         let handle = watcher::start_watcher(
             &self.config,
             self.config_path.clone(),
+            store,
             self.db.clone(),
             self.event_tx.clone(),
             self.ai_event_tx.clone(),
@@ -127,15 +154,16 @@ impl Core {
     /// Recover pending AI tasks on startup
     ///
     /// Checks for sessions that need title generation, memory extraction, or skill extraction
-    /// and triggers them based on config feature flags.
+    /// and triggers them based on config feature flags. Requires DB storage mode.
     pub async fn recover_pending_ai_tasks(&self) {
-        // Check if AI is enabled
-        if !self.config.ai.enabled || self.config.ai.provider.is_none() {
+        // Requires DB + active AI
+        let db = match &self.db {
+            Some(db) => db.clone(),
+            None => return,
+        };
+        if !self.config.is_ai_active() {
             return;
         }
-
-        let features = &self.config.ai.features;
-        let db = self.db.clone();
 
         // Query pending sessions
         let sessions = match db
@@ -193,7 +221,7 @@ impl Core {
 
         let mut trigger = ai::AiAutoTrigger::new(
             self.config_path.clone(),
-            self.db.clone(),
+            db.clone(),
             self.ai_event_tx.clone(),
             self.ai_task_queue.clone(),
         );
@@ -201,13 +229,25 @@ impl Core {
         for (session_id, message_count, needs_title, needs_memory, needs_skills) in sessions {
             let sid = &session_id[..8.min(session_id.len())];
 
-            if needs_title && features.title_generation {
+            if needs_title
+                && self
+                    .config
+                    .is_feature_active(config::AiFeature::TitleGeneration)
+            {
                 tracing::info!("AI recovery: triggering title for {}", sid);
                 trigger.on_session_parsed(&session_id, message_count).await;
-            } else if needs_memory && features.memory_extraction {
+            } else if needs_memory
+                && self
+                    .config
+                    .is_feature_active(config::AiFeature::MemoryExtraction)
+            {
                 tracing::info!("AI recovery: triggering memory extraction for {}", sid);
                 trigger.on_session_parsed(&session_id, message_count).await;
-            } else if needs_skills && features.skills_discovery {
+            } else if needs_skills
+                && self
+                    .config
+                    .is_feature_active(config::AiFeature::SkillsDiscovery)
+            {
                 tracing::info!("AI recovery: triggering skill extraction for {}", sid);
                 trigger.on_session_parsed(&session_id, message_count).await;
             }
@@ -229,6 +269,7 @@ impl Core {
         api::serve(
             addr,
             self.db.clone(),
+            self.ephemeral.clone(),
             &self.config,
             self.config_path.clone(),
             self.event_tx.clone(),
@@ -248,14 +289,17 @@ impl Core {
         &self.ai_task_queue
     }
 
-    /// Get a reference to the database
-    pub fn database(&self) -> &Arc<Database> {
-        &self.db
+    /// Get a reference to the database (None in ephemeral mode)
+    pub fn database(&self) -> Option<&Arc<Database>> {
+        self.db.as_ref()
     }
 
-    /// Start all enabled periodic background tasks (ranking, duplicate cleanup, embedding refresh)
+    /// Start all enabled periodic background tasks (ranking, duplicate cleanup, embedding refresh).
+    /// Requires DB storage mode.
     pub fn start_periodic_tasks(&self) {
-        scheduler::start_scheduler(self.config.clone(), self.db.clone(), self.event_tx.clone());
+        if let Some(db) = &self.db {
+            scheduler::start_scheduler(self.config.clone(), db.clone(), self.event_tx.clone());
+        }
     }
 
     /// Get the event sender for broadcasting events

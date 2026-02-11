@@ -269,32 +269,28 @@ Four periodic tasks maintain the memory system:
 Each task:
 - Runs in its own tokio task with independent timers
 - Has a per-project timeout (60–120 seconds)
-- Is feature-flag gated (requires `ai.enabled` + specific feature flag)
+- Is feature-flag gated (requires `ai.provider` + specific feature toggle)
 - Emits SSE events for progress tracking
 
 Configure intervals and thresholds in your config:
 
 ```toml
-[ai.features]
+[ai]
 memory_extraction = true
 
 [scheduler.ranking]
-enabled = true
 interval_hours = 6
 batch_size = 500
 
 [scheduler.duplicate_cleanup]
-enabled = true
 interval_hours = 24
 similarity_threshold = 0.75
 batch_size = 500
 
 [scheduler.embedding_refresh]
-enabled = true
 interval_hours = 12
 
 [scheduler.skill_cleanup]
-enabled = true
 interval_hours = 24
 ```
 

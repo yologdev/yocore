@@ -50,16 +50,11 @@ pub struct WatchConfigResponse {
 
 #[derive(Serialize)]
 pub struct AiConfigResponse {
-    pub enabled: bool,
     pub provider: Option<String>,
-    pub features: AiFeaturesResponse,
-}
-
-#[derive(Serialize)]
-pub struct AiFeaturesResponse {
     pub title_generation: bool,
-    pub skills_discovery: bool,
+    pub marker_detection: bool,
     pub memory_extraction: bool,
+    pub skills_discovery: bool,
 }
 
 #[derive(Serialize)]
@@ -78,16 +73,11 @@ pub struct ConfigMeta {
 
 #[derive(Deserialize)]
 pub struct UpdateAiConfigRequest {
-    pub enabled: Option<bool>,
     pub provider: Option<String>,
-    pub features: Option<UpdateAiFeaturesRequest>,
-}
-
-#[derive(Deserialize)]
-pub struct UpdateAiFeaturesRequest {
     pub title_generation: Option<bool>,
-    pub skills_discovery: Option<bool>,
+    pub marker_detection: Option<bool>,
     pub memory_extraction: Option<bool>,
+    pub skills_discovery: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -133,13 +123,11 @@ pub async fn get_config(State(state): State<AppState>) -> impl IntoResponse {
                     })
                     .collect(),
                 ai: AiConfigResponse {
-                    enabled: config.ai.enabled,
                     provider: config.ai.provider.clone(),
-                    features: AiFeaturesResponse {
-                        title_generation: config.ai.features.title_generation,
-                        skills_discovery: config.ai.features.skills_discovery,
-                        memory_extraction: config.ai.features.memory_extraction,
-                    },
+                    title_generation: config.ai.title_generation,
+                    marker_detection: config.ai.marker_detection,
+                    memory_extraction: config.ai.memory_extraction,
+                    skills_discovery: config.ai.skills_discovery,
                 },
                 data_dir: config.data_dir().to_string_lossy().to_string(),
                 meta: ConfigMeta {
@@ -208,13 +196,11 @@ pub async fn get_ai_config(State(state): State<AppState>) -> impl IntoResponse {
     match Config::from_file(&state.config_path) {
         Ok(config) => {
             let response = AiConfigResponse {
-                enabled: config.ai.enabled,
                 provider: config.ai.provider.clone(),
-                features: AiFeaturesResponse {
-                    title_generation: config.ai.features.title_generation,
-                    skills_discovery: config.ai.features.skills_discovery,
-                    memory_extraction: config.ai.features.memory_extraction,
-                },
+                title_generation: config.ai.title_generation,
+                marker_detection: config.ai.marker_detection,
+                memory_extraction: config.ai.memory_extraction,
+                skills_discovery: config.ai.skills_discovery,
             };
             Json(response).into_response()
         }
@@ -261,13 +247,11 @@ pub async fn update_ai_config(
     match config.save_to_file(&state.config_path) {
         Ok(()) => {
             let response = AiConfigResponse {
-                enabled: config.ai.enabled,
                 provider: config.ai.provider.clone(),
-                features: AiFeaturesResponse {
-                    title_generation: config.ai.features.title_generation,
-                    skills_discovery: config.ai.features.skills_discovery,
-                    memory_extraction: config.ai.features.memory_extraction,
-                },
+                title_generation: config.ai.title_generation,
+                marker_detection: config.ai.marker_detection,
+                memory_extraction: config.ai.memory_extraction,
+                skills_discovery: config.ai.skills_discovery,
             };
             Json(response).into_response()
         }
@@ -436,9 +420,6 @@ pub async fn remove_watch_path(
 // ============================================================================
 
 fn apply_ai_update(ai: &mut AiConfig, update: UpdateAiConfigRequest) {
-    if let Some(enabled) = update.enabled {
-        ai.enabled = enabled;
-    }
     if let Some(provider) = update.provider {
         ai.provider = if provider.is_empty() {
             None
@@ -446,15 +427,16 @@ fn apply_ai_update(ai: &mut AiConfig, update: UpdateAiConfigRequest) {
             Some(provider)
         };
     }
-    if let Some(features) = update.features {
-        if let Some(title_generation) = features.title_generation {
-            ai.features.title_generation = title_generation;
-        }
-        if let Some(skills_discovery) = features.skills_discovery {
-            ai.features.skills_discovery = skills_discovery;
-        }
-        if let Some(memory_extraction) = features.memory_extraction {
-            ai.features.memory_extraction = memory_extraction;
-        }
+    if let Some(title_generation) = update.title_generation {
+        ai.title_generation = title_generation;
+    }
+    if let Some(marker_detection) = update.marker_detection {
+        ai.marker_detection = marker_detection;
+    }
+    if let Some(memory_extraction) = update.memory_extraction {
+        ai.memory_extraction = memory_extraction;
+    }
+    if let Some(skills_discovery) = update.skills_discovery {
+        ai.skills_discovery = skills_discovery;
     }
 }

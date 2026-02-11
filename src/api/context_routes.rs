@@ -271,7 +271,7 @@ pub async fn get_project_context(
     State(state): State<AppState>,
     Query(query): Query<ProjectContextQuery>,
 ) -> impl IntoResponse {
-    let db = state.db.clone();
+    let db = state.db.clone().unwrap();
     let project_path = query.project_path;
 
     let result = tokio::task::spawn_blocking(move || {
@@ -349,7 +349,7 @@ pub async fn get_session_context(
     State(state): State<AppState>,
     Json(req): Json<SessionContextRequest>,
 ) -> impl IntoResponse {
-    let db = state.db.clone();
+    let db = state.db.clone().unwrap();
 
     let result = tokio::task::spawn_blocking(move || {
         let mcp_db = McpDb::new(db);
@@ -431,7 +431,7 @@ pub async fn get_recent_memories(
     State(state): State<AppState>,
     Query(query): Query<RecentMemoriesQuery>,
 ) -> impl IntoResponse {
-    let db = state.db.clone();
+    let db = state.db.clone().unwrap();
 
     let result = tokio::task::spawn_blocking(move || {
         let mcp_db = McpDb::new(db);
@@ -481,7 +481,7 @@ pub async fn save_lifeboat(
     State(state): State<AppState>,
     Json(req): Json<SaveLifeboatRequest>,
 ) -> impl IntoResponse {
-    let db = state.db.clone();
+    let db = state.db.clone().unwrap();
 
     let result = tokio::task::spawn_blocking(move || {
         let mcp_db = McpDb::new(db);
@@ -551,7 +551,7 @@ pub async fn search_context(
     State(state): State<AppState>,
     Json(req): Json<SearchContextRequest>,
 ) -> impl IntoResponse {
-    let db = state.db.clone();
+    let db = state.db.clone().unwrap();
 
     let result = tokio::task::spawn_blocking(move || {
         let mcp_db = McpDb::new(db);

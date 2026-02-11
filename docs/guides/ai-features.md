@@ -22,7 +22,7 @@ No API key is needed in yocore's config — it spawns the Claude Code CLI which 
 Automatically generates descriptive titles for coding sessions based on their content.
 
 - **Trigger**: Auto-triggered when a new session is parsed
-- **Config**: `ai.features.title_generation = true`
+- **Config**: `ai.title_generation = true`
 - **SSE events**: `ai:title:start`, `ai:title:complete`, `ai:title:error`
 
 ### Memory Extraction
@@ -30,7 +30,7 @@ Automatically generates descriptive titles for coding sessions based on their co
 Extracts structured memories from sessions — decisions, facts, preferences, context, and tasks.
 
 - **Trigger**: Auto-triggered after session parsing
-- **Config**: `ai.features.memory_extraction = true`
+- **Config**: `ai.memory_extraction = true`
 - **SSE events**: `ai:memory:start`, `ai:memory:complete`, `ai:memory:error`
 - **Memory types**: `decision`, `fact`, `preference`, `context`, `task`
 
@@ -41,7 +41,7 @@ See [Memory System](memory-system.md) for details on memory types and lifecycle.
 Discovers reusable patterns and workflows from coding sessions.
 
 - **Trigger**: Auto-triggered after session parsing
-- **Config**: `ai.features.skills_discovery = true`
+- **Config**: `ai.skills_discovery = true`
 - **SSE events**: `ai:skill:start`, `ai:skill:complete`, `ai:skill:error`
 
 ### Marker Detection
@@ -49,6 +49,7 @@ Discovers reusable patterns and workflows from coding sessions.
 Identifies significant moments in sessions: breakthroughs, shipped features, decisions, bugs found, and stuck points.
 
 - **Trigger**: Auto-triggered after session parsing
+- **Config**: `ai.marker_detection = true`
 - **Marker types**: `breakthrough`, `ship`, `decision`, `bug`, `stuck`
 - **SSE events**: `ai:markers:start`, `ai:markers:complete`, `ai:markers:error`
 

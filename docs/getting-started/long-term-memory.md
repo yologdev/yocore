@@ -106,10 +106,7 @@ For memory extraction to work, enable AI in your yocore config:
 
 ```toml
 [ai]
-enabled = true
 provider = "claude_code"
-
-[ai.features]
 memory_extraction = true
 title_generation = true
 skills_discovery = true

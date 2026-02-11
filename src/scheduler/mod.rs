@@ -31,13 +31,7 @@ pub struct TaskResult {
     pub detail: String,
 }
 
-/// Feature dependencies a task can require
-#[derive(Debug, Clone, Copy)]
-enum Requires {
-    Ai,
-    MemoryExtraction,
-    SkillsDiscovery,
-}
+use crate::config::AiFeature;
 
 /// Registered periodic tasks
 #[derive(Clone)]
@@ -58,39 +52,19 @@ impl ScheduledTask {
         }
     }
 
-    /// Feature dependencies this task requires to run.
-    /// All listed dependencies must be satisfied.
-    fn requires(&self) -> &[Requires] {
+    /// The parent AI feature that activates this task.
+    fn parent_feature(&self) -> AiFeature {
         match self {
-            ScheduledTask::Ranking => &[Requires::Ai, Requires::MemoryExtraction],
-            ScheduledTask::DuplicateCleanup => &[Requires::Ai, Requires::MemoryExtraction],
-            ScheduledTask::EmbeddingRefresh => &[Requires::Ai, Requires::MemoryExtraction],
-            ScheduledTask::SkillCleanup => &[Requires::Ai, Requires::SkillsDiscovery],
+            ScheduledTask::Ranking => AiFeature::MemoryExtraction,
+            ScheduledTask::DuplicateCleanup => AiFeature::MemoryExtraction,
+            ScheduledTask::EmbeddingRefresh => AiFeature::MemoryExtraction,
+            ScheduledTask::SkillCleanup => AiFeature::SkillsDiscovery,
         }
     }
 
-    /// Check if all feature dependencies are met
-    fn dependencies_met(&self, config: &Config) -> Result<(), String> {
-        for req in self.requires() {
-            let met = match req {
-                Requires::Ai => config.ai.enabled,
-                Requires::MemoryExtraction => config.ai.features.memory_extraction,
-                Requires::SkillsDiscovery => config.ai.features.skills_discovery,
-            };
-            if !met {
-                return Err(format!("{:?}", req));
-            }
-        }
-        Ok(())
-    }
-
-    fn is_enabled(&self, config: &Config) -> bool {
-        match self {
-            ScheduledTask::Ranking => config.scheduler.ranking.enabled,
-            ScheduledTask::DuplicateCleanup => config.scheduler.duplicate_cleanup.enabled,
-            ScheduledTask::EmbeddingRefresh => config.scheduler.embedding_refresh.enabled,
-            ScheduledTask::SkillCleanup => config.scheduler.skill_cleanup.enabled,
-        }
+    /// Check if this task's parent feature is active
+    fn is_active(&self, config: &Config) -> bool {
+        config.is_feature_active(self.parent_feature())
     }
 
     fn interval_secs(&self, config: &Config) -> u64 {
@@ -176,19 +150,13 @@ pub fn start_scheduler(
     ];
 
     for (idx, task) in all_tasks.into_iter().enumerate() {
-        // Check feature dependencies first
-        if let Err(missing) = task.dependencies_met(&config) {
+        // Check if parent AI feature is active (provider set + feature on + db storage)
+        if !task.is_active(&config) {
             tracing::info!(
-                "Scheduler: task '{}' skipped (requires {} to be enabled)",
+                "Scheduler: task '{}' skipped ({:?} not active)",
                 task.name(),
-                missing
+                task.parent_feature()
             );
-            continue;
-        }
-
-        // Then check the task's own enabled flag
-        if !task.is_enabled(&config) {
-            tracing::info!("Scheduler: task '{}' is disabled", task.name());
             continue;
         }
 
