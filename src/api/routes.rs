@@ -3354,7 +3354,7 @@ pub async fn trigger_marker_detection(
     State(state): State<AppState>,
     Path(session_id): Path<String>,
 ) -> impl IntoResponse {
-    if let Err(resp) = check_ai_feature(&state, AiFeature::SkillsDiscovery) {
+    if let Err(resp) = check_ai_feature(&state, AiFeature::MarkerDetection) {
         return resp.into_response();
     }
 
