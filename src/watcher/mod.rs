@@ -105,6 +105,12 @@ struct WatcherState {
     event_tx: broadcast::Sender<WatcherEvent>,
     /// AI auto-trigger (None in ephemeral mode — no DB for AI tasks)
     ai_trigger: Option<Arc<tokio::sync::Mutex<AiAutoTrigger>>>,
+    /// Config path (for ephemeral title generation)
+    config_path: PathBuf,
+    /// AI event sender (for ephemeral title generation SSE)
+    ai_event_tx: broadcast::Sender<AiEvent>,
+    /// AI task queue (for ephemeral title concurrency)
+    ai_task_queue: AiTaskQueue,
 }
 
 /// Start watching configured paths for session files
@@ -145,6 +151,11 @@ pub async fn start_watcher(
         );
     }
 
+    // Clone before potential move into AiAutoTrigger
+    let config_path_for_state = config_path.clone();
+    let ai_event_tx_for_state = ai_event_tx.clone();
+    let ai_task_queue_for_state = ai_task_queue.clone();
+
     let ai_trigger = db.map(|db| {
         Arc::new(tokio::sync::Mutex::new(AiAutoTrigger::new(
             config_path,
@@ -159,6 +170,9 @@ pub async fn start_watcher(
         store,
         event_tx,
         ai_trigger: ai_trigger.clone(),
+        config_path: config_path_for_state,
+        ai_event_tx: ai_event_tx_for_state,
+        ai_task_queue: ai_task_queue_for_state,
     }));
 
     // Create a channel to send events from notify thread to tokio runtime
@@ -299,6 +313,9 @@ async fn handle_file_event(state: &Arc<tokio::sync::RwLock<WatcherState>>, path:
     let store = Arc::clone(&state_guard.store);
     let event_tx = state_guard.event_tx.clone();
     let ai_trigger = state_guard.ai_trigger.clone();
+    let config_path = state_guard.config_path.clone();
+    let ai_event_tx = state_guard.ai_event_tx.clone();
+    let ai_task_queue = state_guard.ai_task_queue.clone();
 
     // Drop read lock before store queries and parsing
     drop(state_guard);
@@ -346,13 +363,109 @@ async fn handle_file_event(state: &Arc<tokio::sync::RwLock<WatcherState>>, path:
         full_parse(&store, &event_tx, &path_str, &file_stem, &parser_type).await
     };
 
-    if let (Some(count), Some(trigger)) = (message_count, ai_trigger) {
+    if let (Some(count), Some(trigger)) = (message_count, &ai_trigger) {
         trigger
             .lock()
             .await
             .on_session_parsed(&file_stem, count)
             .await;
     }
+
+    // Ephemeral-mode title generation (no DB needed)
+    if let (Some(count), None) = (message_count, &ai_trigger) {
+        if count >= 49 {
+            if let SessionStore::Ephemeral(idx) = store.as_ref() {
+                maybe_trigger_ephemeral_title(
+                    idx,
+                    &file_stem,
+                    &config_path,
+                    &ai_event_tx,
+                    &ai_task_queue,
+                )
+                .await;
+            }
+        }
+    }
+}
+
+/// Trigger title generation for an ephemeral session if conditions are met.
+async fn maybe_trigger_ephemeral_title(
+    idx: &Arc<crate::ephemeral::EphemeralIndex>,
+    session_id: &str,
+    config_path: &Path,
+    ai_event_tx: &broadcast::Sender<AiEvent>,
+    ai_task_queue: &AiTaskQueue,
+) {
+    if idx.has_title(session_id) {
+        return;
+    }
+
+    let config = match Config::from_file(config_path) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::debug!("Ephemeral title: config read failed: {}", e);
+            return;
+        }
+    };
+    if !config.is_ai_active()
+        || !config.is_feature_active(crate::config::AiFeature::TitleGeneration)
+    {
+        tracing::debug!("Ephemeral title: AI not active or title feature disabled");
+        return;
+    }
+
+    let first_messages = match idx.get_first_user_messages(session_id, 10, 4000) {
+        Some(m) => m,
+        None => {
+            tracing::debug!(
+                "Ephemeral title: no user messages found for {}",
+                &session_id[..8]
+            );
+            return;
+        }
+    };
+    tracing::info!(
+        "Ephemeral title: triggering for {} ({} chars)",
+        &session_id[..8],
+        first_messages.len()
+    );
+
+    let permit = match ai_task_queue.acquire().await {
+        Ok(p) => p,
+        Err(_) => return,
+    };
+
+    // Mark as generated before spawning to prevent duplicate triggers
+    idx.set_title_generated(session_id);
+
+    let idx = idx.clone();
+    let sid = session_id.to_string();
+    let tx = ai_event_tx.clone();
+
+    tokio::spawn(async move {
+        let _permit = permit;
+        let _ = tx.send(AiEvent::TitleStart {
+            session_id: sid.clone(),
+        });
+
+        let result = crate::ai::title::generate_title_from_text(&sid, &first_messages, None).await;
+
+        if let Some(ref title) = result.title {
+            idx.update_session(&sid, Some(title.clone()), None);
+            idx.set_title_generated(&sid);
+            tracing::info!("Ephemeral title generated for {}", &sid[..8]);
+            let _ = tx.send(AiEvent::TitleComplete {
+                session_id: sid,
+                title: title.clone(),
+            });
+        } else if let Some(error) = result.error {
+            tracing::warn!("Ephemeral title failed for {}: {}", &sid[..8], error);
+            let _ = tx.send(AiEvent::TitleError {
+                session_id: sid,
+                error,
+            });
+        }
+    });
 }
 
 /// Read and parse a full session file, then store via SessionStore.

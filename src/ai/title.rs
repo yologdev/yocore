@@ -184,6 +184,42 @@ pub async fn store_title(db: &Arc<Database>, session_id: &str, title: &str) -> R
     .await
 }
 
+/// Generate a title from pre-formatted message text (for ephemeral mode).
+/// Does not require a database — takes the message context directly.
+pub async fn generate_title_from_text(
+    session_id: &str,
+    first_messages: &str,
+    cli: Option<DetectedCli>,
+) -> TitleGenerationResult {
+    let cli = match cli {
+        Some(c) => c,
+        None => detect_claude_code().await,
+    };
+
+    if !cli.installed {
+        return TitleGenerationResult {
+            session_id: session_id.to_string(),
+            title: None,
+            error: Some("Claude Code CLI not installed".to_string()),
+        };
+    }
+
+    let prompt = build_title_prompt(first_messages);
+    let timeout = cli.provider.title_timeout();
+    match run_cli(&cli, &prompt, timeout).await {
+        Ok(output) => TitleGenerationResult {
+            session_id: session_id.to_string(),
+            title: Some(clean_title(&output)),
+            error: None,
+        },
+        Err(e) => TitleGenerationResult {
+            session_id: session_id.to_string(),
+            title: None,
+            error: Some(e),
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -45,7 +45,7 @@ fn default_max_sessions() -> usize {
 }
 
 fn default_max_messages_per_session() -> usize {
-    5000
+    50
 }
 
 impl Default for EphemeralConfig {

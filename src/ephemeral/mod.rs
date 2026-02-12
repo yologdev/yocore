@@ -30,6 +30,8 @@ pub struct SessionMeta {
     pub file_size: i64,
     pub has_code: bool,
     pub has_errors: bool,
+    pub is_hidden: bool,
+    pub title_generated: bool,
     pub created_at: String,
     /// For LRU eviction
     last_accessed: Instant,
@@ -191,6 +193,8 @@ impl EphemeralIndex {
             file_size,
             has_code,
             has_errors,
+            is_hidden: false,
+            title_generated: false,
             created_at: now,
             last_accessed: Instant::now(),
         };
@@ -199,10 +203,19 @@ impl EphemeralIndex {
             .write()
             .unwrap()
             .insert(session_id.to_string(), session);
+        // Keep only the last N messages from full parse to save memory.
+        // Older messages can still be read from the JSONL file via byte offsets.
+        let tail_size = self.config.max_messages_per_session;
+        let trimmed = if messages.len() > tail_size {
+            let skip = messages.len() - tail_size;
+            messages.into_iter().skip(skip).collect()
+        } else {
+            messages
+        };
         self.messages
             .write()
             .unwrap()
-            .insert(session_id.to_string(), messages);
+            .insert(session_id.to_string(), trimmed);
     }
 
     /// Append messages from incremental parse
@@ -229,14 +242,10 @@ impl EphemeralIndex {
             .unwrap_or(0);
         drop(sessions);
 
-        // Append messages (respecting max_messages_per_session)
+        // Append new messages (incremental updates are small, no cap needed)
         let mut messages = self.messages.write().unwrap();
         let msgs = messages.entry(session_id.to_string()).or_default();
-        for msg in new_messages {
-            if msgs.len() < self.config.max_messages_per_session {
-                msgs.push(msg);
-            }
-        }
+        msgs.extend(new_messages);
 
         total
     }
@@ -266,11 +275,22 @@ impl EphemeralIndex {
     }
 
     /// List sessions, optionally filtered by project_id.
+    /// By default, hidden sessions are excluded unless `include_hidden` is true.
     pub fn list_sessions(&self, project_id: Option<&str>) -> Vec<SessionMeta> {
+        self.list_sessions_filtered(project_id, false)
+    }
+
+    /// List sessions with optional hidden filter.
+    pub fn list_sessions_filtered(
+        &self,
+        project_id: Option<&str>,
+        include_hidden: bool,
+    ) -> Vec<SessionMeta> {
         let sessions = self.sessions.read().unwrap();
         let mut result: Vec<SessionMeta> = sessions
             .values()
             .filter(|s| project_id.is_none_or(|pid| s.project_id == pid))
+            .filter(|s| include_hidden || !s.is_hidden)
             .cloned()
             .collect();
         // Sort by created_at descending
@@ -306,6 +326,174 @@ impl EphemeralIndex {
             msgs.iter()
                 .find(|m| m.sequence_num == sequence_num)
                 .cloned()
+        })
+    }
+
+    // ========================================================================
+    // Mutation methods (for API routes in ephemeral mode)
+    // ========================================================================
+
+    /// Update session title and/or visibility. Returns true if found.
+    pub fn update_session(
+        &self,
+        session_id: &str,
+        title: Option<String>,
+        is_hidden: Option<bool>,
+    ) -> bool {
+        let mut sessions = self.sessions.write().unwrap();
+        if let Some(session) = sessions.get_mut(session_id) {
+            if let Some(t) = title {
+                session.title = Some(t);
+            }
+            if let Some(h) = is_hidden {
+                session.is_hidden = h;
+            }
+            session.last_accessed = Instant::now();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Delete a session and its messages. Returns true if found.
+    pub fn delete_session(&self, session_id: &str) -> bool {
+        let removed = self.sessions.write().unwrap().remove(session_id).is_some();
+        if removed {
+            self.messages.write().unwrap().remove(session_id);
+        }
+        removed
+    }
+
+    /// Update a project's name. Returns true if found.
+    pub fn update_project(&self, project_id: &str, name: Option<String>) -> bool {
+        let mut projects = self.projects.write().unwrap();
+        if let Some(project) = projects.get_mut(project_id) {
+            if let Some(n) = name {
+                project.name = n;
+            }
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Delete a project and all its sessions/messages. Returns true if found.
+    pub fn delete_project(&self, project_id: &str) -> bool {
+        let removed = self.projects.write().unwrap().remove(project_id).is_some();
+        if removed {
+            // Remove folder_path mapping
+            self.folder_to_project
+                .write()
+                .unwrap()
+                .retain(|_, pid| pid != project_id);
+            // Remove all sessions for this project
+            let session_ids: Vec<String> = self
+                .sessions
+                .read()
+                .unwrap()
+                .values()
+                .filter(|s| s.project_id == project_id)
+                .map(|s| s.id.clone())
+                .collect();
+            let mut sessions = self.sessions.write().unwrap();
+            let mut messages = self.messages.write().unwrap();
+            for sid in session_ids {
+                sessions.remove(&sid);
+                messages.remove(&sid);
+            }
+        }
+        removed
+    }
+
+    /// Count total sessions (for session limit info).
+    pub fn session_count(&self) -> usize {
+        self.sessions.read().unwrap().len()
+    }
+
+    /// Check if a session already has an AI-generated title.
+    pub fn has_title(&self, session_id: &str) -> bool {
+        self.sessions
+            .read()
+            .unwrap()
+            .get(session_id)
+            .map(|s| s.title_generated)
+            .unwrap_or(false)
+    }
+
+    /// Mark a session's title as AI-generated.
+    pub fn set_title_generated(&self, session_id: &str) {
+        if let Some(session) = self.sessions.write().unwrap().get_mut(session_id) {
+            session.title_generated = true;
+        }
+    }
+
+    /// Get first N user messages from the JSONL file for title generation.
+    /// Reads directly from disk since the in-memory index may only hold recent messages.
+    pub fn get_first_user_messages(
+        &self,
+        session_id: &str,
+        max_messages: usize,
+        max_chars: usize,
+    ) -> Option<String> {
+        let file_path = {
+            let sessions = self.sessions.read().unwrap();
+            sessions.get(session_id)?.file_path.clone()
+        };
+
+        // Read first user messages from the JSONL file
+        let file = std::fs::File::open(&file_path).ok()?;
+        let reader = std::io::BufReader::new(file);
+
+        use std::io::BufRead;
+        let mut user_messages = Vec::new();
+        for line in reader.lines() {
+            let line = match line {
+                Ok(l) => l,
+                Err(_) => break,
+            };
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&line) {
+                if val.get("type").and_then(|t| t.as_str()) == Some("user") {
+                    if let Some(message) = val.get("message") {
+                        if let Some(content) = message.get("content") {
+                            let text = if let Some(s) = content.as_str() {
+                                s.to_string()
+                            } else if let Some(arr) = content.as_array() {
+                                // Content can be array of blocks
+                                arr.iter()
+                                    .filter_map(|b| {
+                                        if b.get("type")?.as_str()? == "text" {
+                                            b.get("text")?.as_str().map(|s| s.to_string())
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join(" ")
+                            } else {
+                                continue;
+                            };
+                            if !text.is_empty() {
+                                user_messages
+                                    .push(format!("user: {}", &text[..text.len().min(500)]));
+                                if user_messages.len() >= max_messages {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if user_messages.is_empty() {
+            return None;
+        }
+
+        let combined = user_messages.join("\n\n");
+        Some(if combined.len() > max_chars {
+            combined[..max_chars].to_string()
+        } else {
+            combined
         })
     }
 

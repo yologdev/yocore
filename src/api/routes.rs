@@ -149,6 +149,19 @@ pub async fn create_project(
     State(state): State<AppState>,
     Json(req): Json<CreateProjectRequest>,
 ) -> impl IntoResponse {
+    // Ephemeral mode: create in-memory project
+    if let Some(idx) = &state.ephemeral {
+        let id = idx.get_or_create_project(&req.folder_path, &req.name);
+        let project = idx.get_project(&id);
+        return Json(serde_json::json!({
+            "id": id,
+            "name": project.as_ref().map(|p| &p.name).unwrap_or(&req.name),
+            "folder_path": project.as_ref().map(|p| &p.folder_path).unwrap_or(&req.folder_path),
+            "created_at": project.map(|p| p.created_at).unwrap_or_default(),
+        }))
+        .into_response();
+    }
+
     let id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now().to_rfc3339();
 
@@ -273,6 +286,22 @@ pub async fn update_project(
     Path(id): Path<String>,
     Json(req): Json<UpdateProjectRequest>,
 ) -> impl IntoResponse {
+    // Ephemeral mode: update in-memory project
+    if let Some(idx) = &state.ephemeral {
+        if idx.update_project(&id, req.name) {
+            return Json(serde_json::json!({
+                "id": id,
+                "updated_at": chrono::Utc::now().to_rfc3339()
+            }))
+            .into_response();
+        }
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "Project not found" })),
+        )
+            .into_response();
+    }
+
     let now = chrono::Utc::now().to_rfc3339();
     let id_clone = id.clone();
     let now_clone = now.clone();
@@ -339,6 +368,18 @@ pub async fn delete_project(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
+    // Ephemeral mode: delete from in-memory index
+    if let Some(idx) = &state.ephemeral {
+        if idx.delete_project(&id) {
+            return StatusCode::NO_CONTENT.into_response();
+        }
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "Project not found" })),
+        )
+            .into_response();
+    }
+
     let result = state
         .db
         .as_ref()
@@ -507,6 +548,33 @@ pub async fn get_project_analytics(
     State(state): State<AppState>,
     Path(project_id): Path<String>,
 ) -> impl IntoResponse {
+    // Ephemeral mode: return zeroed analytics
+    if state.db.is_none() {
+        return Json(ProjectAnalyticsBatch {
+            stats: ProjectStats {
+                total_sessions: 0,
+                total_messages: 0,
+                total_duration_ms: 0,
+                messages_with_errors: 0,
+                total_input_tokens: 0,
+                total_output_tokens: 0,
+                total_cache_read_tokens: 0,
+                total_cache_creation_tokens: 0,
+                models_used: std::collections::HashMap::new(),
+                user_messages: 0,
+                assistant_messages: 0,
+                tool_uses: 0,
+                tool_results: 0,
+            },
+            session_metrics: vec![],
+            active_dates: vec![],
+            daily_tokens: vec![],
+            daily_errors: vec![],
+            daily_vibe: vec![],
+        })
+        .into_response();
+    }
+
     let result = state
         .db
         .as_ref()
@@ -763,7 +831,8 @@ pub async fn list_sessions(
 ) -> impl IntoResponse {
     // Ephemeral mode
     if let Some(idx) = &state.ephemeral {
-        let all = idx.list_sessions(query.project_id.as_deref());
+        let include_hidden = query.include_hidden.unwrap_or(false);
+        let all = idx.list_sessions_filtered(query.project_id.as_deref(), include_hidden);
         let offset = query.offset.unwrap_or(0) as usize;
         let limit = query.limit.unwrap_or(50) as usize;
         let total = all.len();
@@ -984,6 +1053,22 @@ pub async fn update_session(
     Path(id): Path<String>,
     Json(req): Json<UpdateSessionRequest>,
 ) -> impl IntoResponse {
+    // Ephemeral mode: update in-memory session
+    if let Some(idx) = &state.ephemeral {
+        if idx.update_session(&id, req.title, req.is_hidden) {
+            return Json(serde_json::json!({
+                "id": id,
+                "updated_at": chrono::Utc::now().to_rfc3339()
+            }))
+            .into_response();
+        }
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "Session not found" })),
+        )
+            .into_response();
+    }
+
     let now = chrono::Utc::now().to_rfc3339();
     let id_clone = id.clone();
     let now_clone = now.clone();
@@ -1034,6 +1119,18 @@ pub async fn delete_session(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
+    // Ephemeral mode: delete from in-memory index
+    if let Some(idx) = &state.ephemeral {
+        if idx.delete_session(&id) {
+            return StatusCode::NO_CONTENT.into_response();
+        }
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "Session not found" })),
+        )
+            .into_response();
+    }
+
     let result = state
         .db
         .as_ref()
@@ -1291,6 +1388,10 @@ pub async fn search(
     State(state): State<AppState>,
     Json(req): Json<SearchRequest>,
 ) -> impl IntoResponse {
+    if state.db.is_none() {
+        return Json(serde_json::json!({ "results": [], "total": 0 })).into_response();
+    }
+
     let limit = req.limit.unwrap_or(100);
     let query_str = req.query.clone();
     let project_id = req.project_id.clone();
@@ -1422,6 +1523,10 @@ pub async fn search_session(
     Path(session_id): Path<String>,
     Query(query): Query<SearchSessionQuery>,
 ) -> impl IntoResponse {
+    if state.db.is_none() {
+        return Json(serde_json::json!({ "results": [], "total": 0 })).into_response();
+    }
+
     let limit = query.limit.unwrap_or(50);
     let search_query = query.q.clone();
 
@@ -1608,6 +1713,14 @@ pub async fn append_session_messages(
     Path(session_id): Path<String>,
     Json(req): Json<AppendMessagesRequest>,
 ) -> impl IntoResponse {
+    if state.db.is_none() {
+        return (
+            StatusCode::NOT_IMPLEMENTED,
+            Json(serde_json::json!({ "error": "Not available in ephemeral mode" })),
+        )
+            .into_response();
+    }
+
     let result = state
         .db
         .as_ref()
@@ -1698,6 +1811,14 @@ pub async fn update_agent_summary(
     Path(session_id): Path<String>,
     Json(req): Json<UpdateAgentSummaryRequest>,
 ) -> impl IntoResponse {
+    if state.db.is_none() {
+        return (
+            StatusCode::NOT_IMPLEMENTED,
+            Json(serde_json::json!({ "error": "Not available in ephemeral mode" })),
+        )
+            .into_response();
+    }
+
     let result = state
         .db
         .as_ref()
@@ -1839,6 +1960,10 @@ pub async fn list_memories(
     State(state): State<AppState>,
     Query(query): Query<ListMemoriesQuery>,
 ) -> impl IntoResponse {
+    if state.db.is_none() {
+        return Json(serde_json::json!({ "memories": [], "total": 0 })).into_response();
+    }
+
     let result = state
         .db
         .as_ref()
@@ -2018,6 +2143,10 @@ pub async fn search_memories(
     State(state): State<AppState>,
     Json(req): Json<SearchMemoriesRequest>,
 ) -> impl IntoResponse {
+    if state.db.is_none() {
+        return Json(serde_json::json!({ "memories": [], "total": 0 })).into_response();
+    }
+
     let limit = req.limit.unwrap_or(20) as usize;
     let query_str = req.query.clone();
     let project_id_input = req.project_id.clone();
@@ -2127,6 +2256,14 @@ fn memory_to_api_json(memory: crate::mcp::types::Memory) -> serde_json::Value {
 }
 
 pub async fn get_memory(State(state): State<AppState>, Path(id): Path<i64>) -> impl IntoResponse {
+    if state.db.is_none() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "Not found" })),
+        )
+            .into_response();
+    }
+
     let result = state
         .db
         .as_ref()
@@ -2184,6 +2321,14 @@ pub async fn update_memory(
     Path(id): Path<i64>,
     Json(req): Json<UpdateMemoryRequest>,
 ) -> impl IntoResponse {
+    if state.db.is_none() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "Not found" })),
+        )
+            .into_response();
+    }
+
     // Early return if no updates
     if req.state.is_none() && req.confidence.is_none() && req.is_validated.is_none() {
         return Json(serde_json::json!({ "id": id })).into_response();
@@ -2239,6 +2384,14 @@ pub async fn delete_memory(
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> impl IntoResponse {
+    if state.db.is_none() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "Not found" })),
+        )
+            .into_response();
+    }
+
     // Soft delete by setting state to 'removed'
     let result = state
         .db
@@ -2286,6 +2439,17 @@ pub async fn get_memory_stats(
     State(state): State<AppState>,
     Path(project_id): Path<String>,
 ) -> impl IntoResponse {
+    if state.db.is_none() {
+        return Json(MemoryStatsResponse {
+            total_count: 0,
+            by_type: vec![],
+            validated_count: 0,
+            avg_confidence: 0.0,
+            sessions_with_memories: 0,
+        })
+        .into_response();
+    }
+
     let result = state
         .db
         .as_ref()
@@ -2379,6 +2543,10 @@ pub async fn get_memory_tags(
     State(state): State<AppState>,
     Path(project_id): Path<String>,
 ) -> impl IntoResponse {
+    if state.db.is_none() {
+        return Json(serde_json::json!({ "tags": [] })).into_response();
+    }
+
     let result = state
         .db
         .as_ref()
@@ -2435,7 +2603,7 @@ pub async fn get_memory_tags(
 // ============================================================================
 
 use crate::ai::cli::detect_claude_code;
-use crate::ai::title::{generate_title, store_title};
+use crate::ai::title::{generate_title, generate_title_from_text, store_title};
 use crate::ai::types::AiEvent;
 use crate::config::Config;
 
@@ -2490,6 +2658,10 @@ pub struct PendingAiSession {
 /// Get sessions that need AI processing (title, memories, skills)
 /// Used for startup recovery when Desktop starts
 pub async fn get_pending_ai_sessions(State(state): State<AppState>) -> impl IntoResponse {
+    if state.db.is_none() {
+        return Json(serde_json::json!({ "sessions": [] })).into_response();
+    }
+
     let result = state
         .db
         .as_ref()
@@ -2651,6 +2823,21 @@ pub struct SessionLimitInfo {
 
 /// Get session limit info (all features now free - unlimited)
 pub async fn get_session_limit_info(State(state): State<AppState>) -> impl IntoResponse {
+    if state.db.is_none() {
+        let count = state
+            .ephemeral
+            .as_ref()
+            .map(|idx| idx.session_count())
+            .unwrap_or(0);
+        return Json(serde_json::json!({
+            "current_sessions": count,
+            "max_sessions": null,
+            "is_limited": false,
+            "storage": "ephemeral"
+        }))
+        .into_response();
+    }
+
     let count = state
         .db
         .as_ref()
@@ -2670,6 +2857,7 @@ pub async fn get_session_limit_info(State(state): State<AppState>) -> impl IntoR
         remaining: -1,
         at_limit: false,
     })
+    .into_response()
 }
 
 #[derive(Debug, Deserialize)]
@@ -2689,6 +2877,79 @@ pub async fn trigger_title_generation(
     }
 
     let force = body.map(|b| b.force).unwrap_or(false);
+
+    // Ephemeral mode: generate title from in-memory messages
+    if let Some(idx) = &state.ephemeral {
+        if !force && idx.has_title(&session_id) {
+            return (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "status": "skipped",
+                    "message": "Title already generated"
+                })),
+            )
+                .into_response();
+        }
+
+        let first_messages = match idx.get_first_user_messages(&session_id, 10, 4000) {
+            Some(m) => m,
+            None => {
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(serde_json::json!({ "error": "No user messages found" })),
+                )
+                    .into_response()
+            }
+        };
+
+        let permit = match state.ai_task_queue.acquire().await {
+            Ok(p) => p,
+            Err(e) => {
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(serde_json::json!({ "error": e })),
+                )
+                    .into_response()
+            }
+        };
+
+        let idx = idx.clone();
+        let ai_event_tx = state.ai_event_tx.clone();
+        let sid = session_id.clone();
+
+        tokio::spawn(async move {
+            let _permit = permit;
+            let _ = ai_event_tx.send(AiEvent::TitleStart {
+                session_id: sid.clone(),
+            });
+
+            let result = generate_title_from_text(&sid, &first_messages, None).await;
+
+            if let Some(ref title) = result.title {
+                idx.update_session(&sid, Some(title.clone()), None);
+                idx.set_title_generated(&sid);
+                let _ = ai_event_tx.send(AiEvent::TitleComplete {
+                    session_id: sid,
+                    title: title.clone(),
+                });
+            } else if let Some(error) = result.error {
+                let _ = ai_event_tx.send(AiEvent::TitleError {
+                    session_id: sid,
+                    error,
+                });
+            }
+        });
+
+        return (
+            StatusCode::ACCEPTED,
+            Json(serde_json::json!({
+                "status": "started",
+                "session_id": session_id,
+                "message": "Title generation started. Listen to SSE for progress."
+            })),
+        )
+            .into_response();
+    }
 
     // Check if session already has AI-generated or user-edited title (unless force)
     if !force {
@@ -3032,6 +3293,10 @@ pub async fn get_session_markers(
     State(state): State<AppState>,
     Path(session_id): Path<String>,
 ) -> impl IntoResponse {
+    if state.db.is_none() {
+        return Json(serde_json::json!({ "markers": [] })).into_response();
+    }
+
     let result = state
         .db
         .as_ref()
@@ -3054,6 +3319,14 @@ pub async fn delete_marker(
     State(state): State<AppState>,
     Path(marker_id): Path<i64>,
 ) -> impl IntoResponse {
+    if state.db.is_none() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "Not found" })),
+        )
+            .into_response();
+    }
+
     let result = state
         .db
         .as_ref()
@@ -3185,6 +3458,11 @@ pub async fn rank_project_memories(
     Path(project_id): Path<String>,
     Query(query): Query<RankMemoriesQuery>,
 ) -> impl IntoResponse {
+    if state.db.is_none() {
+        return Json(serde_json::json!({ "promoted": 0, "demoted": 0, "removed": 0 }))
+            .into_response();
+    }
+
     let batch_size = query.batch_size.unwrap_or(500);
     let project_id_clone = project_id.clone();
 
@@ -3255,6 +3533,17 @@ pub async fn get_ranking_stats(
     State(state): State<AppState>,
     Path(project_id): Path<String>,
 ) -> impl IntoResponse {
+    if state.db.is_none() {
+        return Json(serde_json::json!({
+            "project_id": project_id,
+            "total_memories": 0,
+            "by_state": {},
+            "avg_confidence": 0.0,
+            "last_ranked_at": null
+        }))
+        .into_response();
+    }
+
     let project_id_clone = project_id.clone();
 
     // Verify project exists
@@ -3349,6 +3638,10 @@ pub async fn list_project_skills(
     Path(project_id): Path<String>,
     Query(query): Query<ListSkillsQuery>,
 ) -> impl IntoResponse {
+    if state.db.is_none() {
+        return Json(serde_json::json!({ "skills": [], "total": 0 })).into_response();
+    }
+
     let limit = query.limit.unwrap_or(20);
     let offset = query.offset.unwrap_or(0);
     let sort_by = query.sort_by.clone();
@@ -3516,6 +3809,15 @@ pub async fn get_skill_stats(
     State(state): State<AppState>,
     Path(project_id): Path<String>,
 ) -> impl IntoResponse {
+    if state.db.is_none() {
+        return Json(serde_json::json!({
+            "total_skills": 0,
+            "unique_skills": 0,
+            "sessions_with_skills": 0
+        }))
+        .into_response();
+    }
+
     let result = state
         .db
         .as_ref()
@@ -3565,6 +3867,10 @@ pub async fn get_skill_stats(
 
 /// Backfill embeddings for memories that don't have them yet
 pub async fn backfill_embeddings(State(state): State<AppState>) -> impl IntoResponse {
+    if state.db.is_none() {
+        return Json(serde_json::json!({ "processed": 0 })).into_response();
+    }
+
     let db = state.db.clone().unwrap();
 
     // Get memories without embeddings
@@ -3661,6 +3967,14 @@ pub async fn delete_skill_by_id(
     State(state): State<AppState>,
     Path(skill_id): Path<i64>,
 ) -> impl IntoResponse {
+    if state.db.is_none() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "Not found" })),
+        )
+            .into_response();
+    }
+
     let result = state
         .db
         .as_ref()

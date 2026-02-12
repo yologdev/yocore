@@ -271,6 +271,19 @@ pub async fn get_project_context(
     State(state): State<AppState>,
     Query(query): Query<ProjectContextQuery>,
 ) -> impl IntoResponse {
+    if state.db.is_none() {
+        return Json(json!({
+            "project_name": "",
+            "decisions": [],
+            "facts": [],
+            "preferences": [],
+            "context": [],
+            "tasks": [],
+            "total_memories": 0,
+            "formatted_text": "No memories available in ephemeral mode.",
+        }))
+        .into_response();
+    }
     let db = state.db.clone().unwrap();
     let project_path = query.project_path;
 
@@ -349,6 +362,17 @@ pub async fn get_session_context(
     State(state): State<AppState>,
     Json(req): Json<SessionContextRequest>,
 ) -> impl IntoResponse {
+    if state.db.is_none() {
+        return Json(json!({
+            "session": { "active_task": null, "resume_context": null, "recent_decisions": [], "open_questions": [] },
+            "session_memories": [],
+            "recent_memories": [],
+            "persistent_memories": [],
+            "project_name": "",
+            "formatted_text": "No session context available in ephemeral mode.",
+        }))
+        .into_response();
+    }
     let db = state.db.clone().unwrap();
 
     let result = tokio::task::spawn_blocking(move || {
@@ -431,6 +455,14 @@ pub async fn get_recent_memories(
     State(state): State<AppState>,
     Query(query): Query<RecentMemoriesQuery>,
 ) -> impl IntoResponse {
+    if state.db.is_none() {
+        return Json(json!({
+            "project_name": "",
+            "memories": [],
+            "formatted_text": "No memories available in ephemeral mode.",
+        }))
+        .into_response();
+    }
     let db = state.db.clone().unwrap();
 
     let result = tokio::task::spawn_blocking(move || {
@@ -481,6 +513,14 @@ pub async fn save_lifeboat(
     State(state): State<AppState>,
     Json(req): Json<SaveLifeboatRequest>,
 ) -> impl IntoResponse {
+    if state.db.is_none() {
+        return Json(json!({
+            "success": true,
+            "session_id": req.session_id,
+            "summary": "No-op in ephemeral mode",
+        }))
+        .into_response();
+    }
     let db = state.db.clone().unwrap();
 
     let result = tokio::task::spawn_blocking(move || {
@@ -551,6 +591,14 @@ pub async fn search_context(
     State(state): State<AppState>,
     Json(req): Json<SearchContextRequest>,
 ) -> impl IntoResponse {
+    if state.db.is_none() {
+        return Json(json!({
+            "project_name": "",
+            "memories": [],
+            "formatted_text": "No memories available in ephemeral mode.",
+        }))
+        .into_response();
+    }
     let db = state.db.clone().unwrap();
 
     let result = tokio::task::spawn_blocking(move || {

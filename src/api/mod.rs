@@ -17,11 +17,9 @@ use crate::error::Result;
 use crate::watcher::WatcherEvent;
 
 use axum::{
-    http::StatusCode,
     middleware,
-    response::IntoResponse,
     routing::{delete, get, patch, post, put},
-    Json, Router,
+    Router,
 };
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -143,27 +141,6 @@ pub async fn serve(
     Ok(())
 }
 
-/// Middleware that rejects requests when storage != "db".
-/// Used to guard routes that require SQLite (search, memories, skills, AI, etc.).
-async fn require_db_storage(
-    axum::extract::State(state): axum::extract::State<AppState>,
-    request: axum::http::Request<axum::body::Body>,
-    next: axum::middleware::Next,
-) -> axum::response::Response {
-    if state.db.is_some() {
-        next.run(request).await
-    } else {
-        (
-            StatusCode::NOT_IMPLEMENTED,
-            Json(serde_json::json!({
-                "error": "This endpoint requires storage = \"db\"",
-                "storage": "ephemeral"
-            })),
-        )
-            .into_response()
-    }
-}
-
 /// Create the API router with all routes
 fn create_router(state: AppState) -> Router {
     // CORS configuration - allow all origins for development
@@ -172,53 +149,31 @@ fn create_router(state: AppState) -> Router {
         .allow_methods(Any)
         .allow_headers(Any);
 
-    // Routes that work in both db and ephemeral modes
-    let common_routes = Router::new()
-        // Projects (list, get, resolve work in both; create/update/delete need DB)
+    // All API routes — each handler handles ephemeral mode internally
+    // (returning empty results or serving from EphemeralIndex as appropriate)
+    let api_routes = Router::new()
+        // Projects
         .route("/projects", get(routes::list_projects))
+        .route("/projects", post(routes::create_project))
         .route("/projects/resolve", get(routes::resolve_project))
         .route("/projects/:id", get(routes::get_project))
-        // Sessions (list, get work in both; update/delete need DB)
+        .route("/projects/:id", patch(routes::update_project))
+        .route("/projects/:id", delete(routes::delete_project))
+        .route(
+            "/projects/:id/analytics",
+            get(routes::get_project_analytics),
+        )
+        // Sessions
         .route("/sessions", get(routes::list_sessions))
+        .route("/sessions/limit", get(routes::get_session_limit_info))
         .route("/sessions/:id", get(routes::get_session))
+        .route("/sessions/:id", patch(routes::update_session))
+        .route("/sessions/:id", delete(routes::delete_session))
         .route("/sessions/:id/messages", get(routes::get_session_messages))
         .route(
             "/sessions/:id/messages/:seq/content",
             get(routes::get_message_content),
         )
-        // Session byte streaming (reads from JSONL files)
-        .route("/sessions/:id/bytes", get(routes::read_session_bytes))
-        // Config API (file-based, no DB)
-        .route("/config", get(config_routes::get_config))
-        .route("/config", put(config_routes::update_config))
-        .route("/config/ai", get(config_routes::get_ai_config))
-        .route("/config/ai", put(config_routes::update_ai_config))
-        .route("/config/watch", get(config_routes::list_watch_paths))
-        .route("/config/watch", post(config_routes::add_watch_path))
-        .route(
-            "/config/watch/:index",
-            delete(config_routes::remove_watch_path),
-        )
-        // Server-Sent Events
-        .route("/events", get(sse::events_handler));
-
-    // Routes that require storage = "db" (guarded by middleware)
-    let db_only_routes = Router::new()
-        // Projects (mutations)
-        .route("/projects", post(routes::create_project))
-        .route("/projects/:id", patch(routes::update_project))
-        .route("/projects/:id", delete(routes::delete_project))
-        // Project Analytics
-        .route(
-            "/projects/:id/analytics",
-            get(routes::get_project_analytics),
-        )
-        // Sessions (mutations)
-        .route("/sessions/:id", patch(routes::update_session))
-        .route("/sessions/:id", delete(routes::delete_session))
-        .route("/sessions/:id/markers", get(routes::get_session_markers))
-        .route("/sessions/:id/search", get(routes::search_session))
-        // Session mutations
         .route(
             "/sessions/:id/messages/append",
             post(routes::append_session_messages),
@@ -227,6 +182,9 @@ fn create_router(state: AppState) -> Router {
             "/sessions/:id/agent-summary",
             post(routes::update_agent_summary),
         )
+        .route("/sessions/:id/markers", get(routes::get_session_markers))
+        .route("/sessions/:id/search", get(routes::search_session))
+        .route("/sessions/:id/bytes", get(routes::read_session_bytes))
         // Search
         .route("/search", post(routes::search))
         // Memories
@@ -267,8 +225,6 @@ fn create_router(state: AppState) -> Router {
         .route("/ai/export/generate", post(routes::generate_ai_export))
         .route("/ai/export/chunk", post(routes::process_ai_export_chunk))
         .route("/ai/export/merge", post(routes::merge_ai_export_chunks))
-        // Session Limit
-        .route("/sessions/limit", get(routes::get_session_limit_info))
         // Memory Ranking
         .route(
             "/projects/:id/rank-memories",
@@ -284,7 +240,7 @@ fn create_router(state: AppState) -> Router {
         .route("/skills/:id", delete(routes::delete_skill_by_id))
         // Embeddings
         .route("/embeddings/backfill", post(routes::backfill_embeddings))
-        // Context API (for LLM skills and hooks — requires DB)
+        // Context API
         .route("/context/project", get(context_routes::get_project_context))
         .route(
             "/context/session",
@@ -296,14 +252,19 @@ fn create_router(state: AppState) -> Router {
         )
         .route("/context/lifeboat", post(context_routes::save_lifeboat))
         .route("/context/search", post(context_routes::search_context))
-        // Apply DB guard middleware
-        .layer(middleware::from_fn_with_state(
-            state.clone(),
-            require_db_storage,
-        ));
-
-    let api_routes = common_routes
-        .merge(db_only_routes)
+        // Config API
+        .route("/config", get(config_routes::get_config))
+        .route("/config", put(config_routes::update_config))
+        .route("/config/ai", get(config_routes::get_ai_config))
+        .route("/config/ai", put(config_routes::update_ai_config))
+        .route("/config/watch", get(config_routes::list_watch_paths))
+        .route("/config/watch", post(config_routes::add_watch_path))
+        .route(
+            "/config/watch/:index",
+            delete(config_routes::remove_watch_path),
+        )
+        // Server-Sent Events
+        .route("/events", get(sse::events_handler))
         // Apply auth middleware to all API routes
         .layer(middleware::from_fn_with_state(
             state.clone(),
