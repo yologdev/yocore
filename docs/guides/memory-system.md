@@ -1,4 +1,4 @@
-# Memory System Deep Dive
+# Yo Memory System
 
 Yocore's memory system extracts, organizes, ranks, and serves knowledge from AI coding sessions. This page explains how each piece works internally.
 
@@ -269,32 +269,28 @@ Four periodic tasks maintain the memory system:
 Each task:
 - Runs in its own tokio task with independent timers
 - Has a per-project timeout (60–120 seconds)
-- Is feature-flag gated (requires `ai.enabled` + specific feature flag)
+- Is feature-flag gated (requires `ai.provider` + specific feature toggle)
 - Emits SSE events for progress tracking
 
 Configure intervals and thresholds in your config:
 
 ```toml
-[ai.features]
+[ai]
 memory_extraction = true
 
-[ai.features.ranking]
-enabled = true
+[scheduler.ranking]
 interval_hours = 6
 batch_size = 500
 
-[ai.features.duplicate_cleanup]
-enabled = true
+[scheduler.duplicate_cleanup]
 interval_hours = 24
 similarity_threshold = 0.75
 batch_size = 500
 
-[ai.features.embedding_refresh]
-enabled = true
+[scheduler.embedding_refresh]
 interval_hours = 12
 
-[ai.features.skill_cleanup]
-enabled = true
+[scheduler.skill_cleanup]
 interval_hours = 24
 ```
 
@@ -315,4 +311,4 @@ For day-to-day use, [yoskill](https://github.com/yologdev/yoskill) commands are 
 | `/yo tags` | Browse available memory tags |
 | `/yo status` | Verify yocore is running and connected |
 
-The SessionStart and PreCompact hooks handle context flow automatically — you don't need to manually save or restore state. See [Long-Term Memory setup](../getting-started/long-term-memory.md) for installation.
+The SessionStart and PreCompact hooks handle context flow automatically — you don't need to manually save or restore state. See [Yo Memory setup](../getting-started/yo-memory.md) for installation.

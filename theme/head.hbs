@@ -1,0 +1,12 @@
+<script>
+// Force light theme: runs in <head> before page renders
+// One-time migration for users with cached navy preference
+(function() {
+    try {
+        if (!localStorage.getItem('yocore-theme-v2')) {
+            localStorage.setItem('mdbook-theme', 'light');
+            localStorage.setItem('yocore-theme-v2', '1');
+        }
+    } catch(e) {}
+})();
+</script>

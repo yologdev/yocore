@@ -1,28 +1,33 @@
-/* Yolog Brand Theme */
-/* Applies to ALL mdBook themes — fonts, spacing, and refinements */
+/* Yolog Brand Theme — matches Yolog Desktop app design */
 
 /* ── Fonts ── */
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&display=swap');
 
-/* ── Global typography (all themes) ── */
+/* ══════════════════════════════════════════════
+   GLOBAL — Typography & Spacing (all themes)
+   ══════════════════════════════════════════════ */
 
-body,
-.sidebar .sidebar-scrollbox,
-.sidebar .sidebar-scrollbox a {
+body {
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
 }
 
+.sidebar,
+.sidebar .sidebar-scrollbox,
+.sidebar .sidebar-scrollbox a {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
+}
+
 h1, h2, h3, h4, h5, h6 {
     font-family: 'Space Grotesk', 'Inter', sans-serif !important;
     font-weight: 600;
-    letter-spacing: -0.01em;
+    letter-spacing: -0.015em;
 }
 
 h1 {
     font-weight: 700;
-    letter-spacing: -0.02em;
+    letter-spacing: -0.025em;
 }
 
 code, pre, pre code, .hljs {
@@ -30,128 +35,129 @@ code, pre, pre code, .hljs {
 }
 
 pre > .buttons button {
-    font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace !important;
+    font-family: 'JetBrains Mono', monospace !important;
 }
-
-/* ── Global spacing (all themes) ── */
 
 /* Content area */
 .content main {
-    max-width: 820px;
-    padding: 0 24px;
+    max-width: 840px;
+    padding: 20px 32px 40px;
     line-height: 1.75;
-    font-size: 16px;
+    font-size: 15.5px;
 }
 
 @media (min-width: 768px) {
     .content main {
-        padding: 0 48px;
+        padding: 28px 56px 60px;
     }
 }
 
-/* Heading spacing */
+/* Headings */
 .content main h1 {
-    font-size: 2.2em;
+    font-size: 2em;
     margin-top: 0;
-    margin-bottom: 0.8em;
-    padding-bottom: 0.3em;
-    border-bottom: 1px solid var(--table-border-color, rgba(255,255,255,0.1));
+    margin-bottom: 0.6em;
+    padding-bottom: 0.35em;
+    line-height: 1.25;
 }
 
 .content main h2 {
-    font-size: 1.6em;
-    margin-top: 2em;
-    margin-bottom: 0.6em;
-    padding-bottom: 0.25em;
-    border-bottom: 1px solid var(--table-border-color, rgba(255,255,255,0.06));
+    font-size: 1.5em;
+    margin-top: 2.2em;
+    margin-bottom: 0.65em;
+    padding-bottom: 0.3em;
+    line-height: 1.3;
 }
 
 .content main h3 {
-    font-size: 1.25em;
+    font-size: 1.2em;
     margin-top: 1.8em;
     margin-bottom: 0.5em;
+    line-height: 1.35;
 }
 
 .content main h4 {
-    font-size: 1.1em;
+    font-size: 1.05em;
     margin-top: 1.5em;
     margin-bottom: 0.4em;
 }
 
-/* Paragraph spacing */
+/* Paragraphs */
 .content main p {
     margin-top: 0;
-    margin-bottom: 1.15em;
+    margin-bottom: 1em;
 }
 
-/* List spacing */
+/* Lists */
 .content main ul,
 .content main ol {
-    margin-top: 0.5em;
-    margin-bottom: 1.2em;
-    padding-left: 1.8em;
+    margin-top: 0.4em;
+    margin-bottom: 1.1em;
+    padding-left: 1.6em;
 }
 
 .content main li {
-    margin-bottom: 0.45em;
+    margin-bottom: 0.35em;
     line-height: 1.7;
 }
 
 .content main li p {
-    margin-bottom: 0.4em;
+    margin-bottom: 0.3em;
 }
 
-/* Nested lists */
 .content main li > ul,
 .content main li > ol {
-    margin-top: 0.35em;
-    margin-bottom: 0.35em;
+    margin-top: 0.3em;
+    margin-bottom: 0.3em;
 }
 
 /* Code blocks */
 pre {
-    border-radius: 8px !important;
-    padding: 1em 1.2em !important;
-    margin: 1.2em 0 !important;
-    font-size: 0.875em !important;
-    line-height: 1.6 !important;
+    border-radius: 10px !important;
+    padding: 16px 20px !important;
+    margin: 1.1em 0 1.3em !important;
+    font-size: 13.5px !important;
+    line-height: 1.65 !important;
     overflow-x: auto;
 }
 
 /* Inline code */
 :not(pre) > code {
-    font-size: 0.875em !important;
-    padding: 0.15em 0.4em !important;
-    border-radius: 4px !important;
+    font-size: 0.87em !important;
+    padding: 2px 6px !important;
+    border-radius: 5px !important;
+    font-weight: 500;
 }
 
 /* Tables */
 table {
-    margin: 1.2em 0 !important;
+    margin: 1.3em 0 !important;
     border-collapse: collapse;
     width: 100%;
-    font-size: 0.925em;
-    line-height: 1.6;
+    font-size: 14.5px;
+    line-height: 1.55;
+    border-radius: 10px;
+    overflow: hidden;
 }
 
 table th {
-    font-family: 'Space Grotesk', 'Inter', sans-serif !important;
+    font-family: 'Inter', sans-serif !important;
     font-weight: 600;
-    font-size: 0.85em;
+    font-size: 11.5px;
     text-transform: uppercase;
-    letter-spacing: 0.04em;
-    padding: 0.75em 1em !important;
+    letter-spacing: 0.06em;
+    padding: 10px 16px !important;
 }
 
 table td {
-    padding: 0.65em 1em !important;
+    padding: 10px 16px !important;
 }
 
 /* Blockquotes */
 blockquote {
-    border-radius: 0 8px 8px 0 !important;
-    padding: 0.9em 1.4em !important;
-    margin: 1.4em 0 !important;
+    border-radius: 0 10px 10px 0 !important;
+    padding: 14px 20px !important;
+    margin: 1.3em 0 !important;
     border-left-width: 3px !important;
 }
 
@@ -159,88 +165,104 @@ blockquote p:last-child {
     margin-bottom: 0;
 }
 
-/* ── Sidebar spacing (all themes) ── */
+/* ══════════════════════════════════════════════
+   SIDEBAR — Layout & Spacing (all themes)
+   ══════════════════════════════════════════════ */
+
+.sidebar {
+    transition: background-color 0.2s;
+}
 
 .sidebar .sidebar-scrollbox {
-    padding: 16px 12px !important;
+    padding: 20px 14px !important;
 }
 
 .sidebar .sidebar-scrollbox .chapter {
-    line-height: 1.5;
+    line-height: 1.45;
 }
 
 .sidebar .sidebar-scrollbox .chapter li {
-    margin-top: 2px;
+    margin-top: 1px;
 }
 
 .sidebar .sidebar-scrollbox .chapter li a,
 .sidebar .sidebar-scrollbox .chapter li > span {
     display: block;
-    padding: 6px 14px !important;
-    border-radius: 6px;
+    padding: 7px 14px !important;
+    border-radius: 8px;
     transition: background-color 0.15s, color 0.15s;
     font-size: 14px;
+    font-weight: 450;
 }
 
-.sidebar .sidebar-scrollbox .chapter li.chapter-item {
-    margin-top: 2px;
-}
-
-/* Section headers in sidebar */
+/* Section headers */
 .sidebar .sidebar-scrollbox .chapter li.part-title {
-    font-family: 'Space Grotesk', 'Inter', sans-serif !important;
+    font-family: 'Inter', sans-serif !important;
     font-weight: 700;
-    font-size: 11px;
+    font-size: 10.5px;
     text-transform: uppercase;
-    letter-spacing: 0.08em;
-    padding: 20px 14px 6px 14px !important;
-    margin-top: 8px;
+    letter-spacing: 0.1em;
+    padding: 22px 14px 6px !important;
+    margin-top: 4px;
 }
 
-/* Sub-items indent */
+/* Sub-items */
 .sidebar .sidebar-scrollbox .chapter li.chapter-item .section li a {
-    padding-left: 28px !important;
+    padding-left: 30px !important;
     font-size: 13.5px;
 }
 
 /* Menu bar */
 #menu-bar {
     padding: 0 8px;
+    height: 50px;
 }
 
 #menu-bar .left-buttons,
 #menu-bar .right-buttons {
     display: flex;
     align-items: center;
-    gap: 2px;
+    gap: 4px;
+}
+
+/* Book title */
+#menu-bar h1.menu-title {
+    font-family: 'Space Grotesk', 'Inter', sans-serif !important;
+    font-size: 18px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
 }
 
 /* Nav arrows */
 .nav-chapters {
-    font-size: 2em;
-    opacity: 0.5;
-    transition: opacity 0.15s;
+    font-size: 1.8em;
+    opacity: 0.35;
+    transition: opacity 0.2s;
 }
 
 .nav-chapters:hover {
-    opacity: 1;
+    opacity: 0.8;
 }
 
-/* ── Light theme colors ── */
+/* ══════════════════════════════════════════════
+   LIGHT THEME — Yolog "Frosted Circuit"
+   Matches Yolog Desktop app light mode
+   ══════════════════════════════════════════════ */
 
 .light {
-    --bg: #F7F9FC;
-    --fg: #0F172A;
+    --bg: #F8FAFB;
+    --fg: #1A202C;
 
     --sidebar-bg: #FFFFFF;
-    --sidebar-fg: #334155;
-    --sidebar-non-existant: #94A3B8;
+    --sidebar-fg: #4A5568;
+    --sidebar-non-existant: #A0AEC0;
     --sidebar-active: #0891B2;
-    --sidebar-spacer: #E2E8F0;
+    --sidebar-spacer: #EDF2F7;
+    --sidebar-header-border-color: #0891B2;
 
-    --scrollbar: #CBD5E1;
+    --scrollbar: #CBD5E0;
 
-    --icons: #64748B;
+    --icons: #718096;
     --icons-hover: #0891B2;
 
     --links: #0891B2;
@@ -249,68 +271,91 @@ blockquote p:last-child {
 
     --theme-popup-bg: #FFFFFF;
     --theme-popup-border: #E2E8F0;
-    --theme-hover: #EEF2F7;
+    --theme-hover: #F1F5F9;
 
-    --quote-bg: #EEF2F7;
+    --quote-bg: #F0FDFA;
     --quote-border: #0891B2;
 
     --warning-border: #F59E0B;
 
+    --footnote-highlight: #0891B2;
+    --blockquote-note-color: #0891B2;
+    --blockquote-important-color: #0891B2;
+
+    /* Override copy button hover from default purple to teal */
+    --copy-button-filter-hover: invert(43%) sepia(93%) saturate(1352%) hue-rotate(155deg) brightness(96%) contrast(95%);
+
     --table-border-color: #E2E8F0;
-    --table-header-bg: #EEF2F7;
-    --table-alternate-bg: #F7F9FC;
+    --table-header-bg: #F7FAFC;
+    --table-alternate-bg: #FAFCFD;
 
     --searchbar-border-color: #E2E8F0;
     --searchbar-bg: #FFFFFF;
-    --searchbar-fg: #0F172A;
-    --searchbar-shadow-color: rgba(8, 145, 178, 0.08);
-    --searchresults-header-fg: #475569;
+    --searchbar-fg: #1A202C;
+    --searchbar-shadow-color: rgba(8, 145, 178, 0.06);
+    --searchresults-header-fg: #4A5568;
     --searchresults-border-color: #E2E8F0;
-    --searchresults-li-bg: #EEF2F7;
+    --searchresults-li-bg: #F7FAFC;
 
-    --search-mark-bg: #A5F3FC;
+    --search-mark-bg: #CCFBF1;
 }
 
+/* Sidebar */
 .light .sidebar {
-    border-right: 1px solid #E2E8F0;
+    background: #FFFFFF;
+    border-right: 1px solid #EDF2F7;
 }
 
-.light .chapter li a:hover {
-    background: #EEF2F7;
+.light .sidebar .sidebar-scrollbox .chapter li.part-title {
+    color: #718096;
+}
+
+.light .sidebar .sidebar-scrollbox .chapter li a {
+    color: #4A5568;
+}
+
+.light .sidebar .sidebar-scrollbox .chapter li a:hover {
+    background: #F7FAFC;
     color: #0891B2;
 }
 
-.light .chapter li a.active {
+.light .sidebar .sidebar-scrollbox .chapter li a.active {
     color: #0891B2;
-    background: rgba(8, 145, 178, 0.08);
+    background: #F0FDFA;
     font-weight: 600;
 }
 
-.light pre {
-    background: #F1F5F9;
-    border: 1px solid #E2E8F0;
+/* Menu bar */
+.light #menu-bar {
+    background: #FFFFFF;
+    border-bottom: 1px solid #EDF2F7;
 }
 
-.light :not(pre) > code {
-    background: #F1F5F9;
-    border: 1px solid #E2E8F0;
+.light #menu-bar h1.menu-title {
+    color: #1A202C;
 }
 
-.light table th {
-    background: #EEF2F7;
-    color: #475569;
+/* Content */
+.light .content {
+    background: #F8FAFB;
 }
 
-.light table td,
-.light table th {
-    border: 1px solid #E2E8F0;
+.light .content main h1 {
+    color: #0F172A;
+    border-bottom: 1px solid #E2E8F0;
 }
 
-.light blockquote {
-    border-left-color: #0891B2;
-    background: #EEF2F7;
+.light .content main h2 {
+    color: #1A202C;
+    border-bottom: 1px solid #EDF2F7;
 }
 
+.light .content main h3,
+.light .content main h4 {
+    color: #1A202C;
+}
+
+/* Links */
 .light a {
     color: #0891B2;
     text-decoration: none;
@@ -322,55 +367,130 @@ blockquote p:last-child {
     text-decoration: underline;
 }
 
-.light #menu-bar {
+/* Code */
+.light pre {
     background: #FFFFFF;
-    border-bottom: 1px solid #E2E8F0;
+    border: 1px solid #E2E8F0;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
 }
 
+.light :not(pre) > code {
+    background: #F1F5F9;
+    border: 1px solid #E2E8F0;
+    color: #0E7490;
+}
+
+/* Tables */
+.light table {
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+    border: 1px solid #E2E8F0;
+}
+
+.light table th {
+    background: #F7FAFC;
+    color: #64748B;
+    border-bottom: 2px solid #E2E8F0;
+}
+
+.light table td {
+    border-bottom: 1px solid #EDF2F7;
+}
+
+.light table td,
+.light table th {
+    border-right: 1px solid #EDF2F7;
+}
+
+.light table td:last-child,
+.light table th:last-child {
+    border-right: none;
+}
+
+.light table tr:last-child td {
+    border-bottom: none;
+}
+
+.light table tr:hover td {
+    background: #FAFCFD;
+}
+
+/* Blockquotes */
+.light blockquote {
+    border-left-color: #0891B2;
+    background: #F0FDFA;
+}
+
+/* Search */
 .light #searchbar {
     border-radius: 8px;
+    border: 1px solid #E2E8F0;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
 }
 
-.light .content main h1 {
-    border-bottom-color: #E2E8F0;
+.light #searchbar:focus {
+    border-color: #0891B2;
+    box-shadow: 0 0 0 3px rgba(8, 145, 178, 0.1);
 }
 
-.light .content main h2 {
-    border-bottom-color: #EEF2F7;
+/* Theme popup */
+.light .theme-popup {
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
 }
 
-/* ── Navy theme refinements ── */
+.light .theme-popup button:focus,
+.light .theme-popup button.theme-selected {
+    outline-color: #0891B2;
+}
+
+/* Remove any remaining purple/blue accent artifacts */
+.light *::selection {
+    background: rgba(8, 145, 178, 0.2);
+}
+
+.light *:focus-visible {
+    outline-color: #0891B2;
+}
+
+/* ══════════════════════════════════════════════
+   NAVY THEME — Yolog dark accent
+   ══════════════════════════════════════════════ */
 
 .navy {
-    --links: #67D6ED;
-    --sidebar-active: #67D6ED;
-    --icons-hover: #67D6ED;
-    --quote-border: #0891B2;
-    --search-mark-bg: rgba(8, 145, 178, 0.3);
+    --links: #67E8F9;
+    --sidebar-active: #67E8F9;
+    --icons-hover: #67E8F9;
+    --quote-border: #22D3EE;
+    --search-mark-bg: rgba(8, 145, 178, 0.35);
 }
 
-.navy .chapter li a:hover {
-    background: rgba(103, 214, 237, 0.08);
-    color: #67D6ED;
+.navy .sidebar .sidebar-scrollbox .chapter li a:hover {
+    background: rgba(103, 232, 249, 0.06);
+    color: #67E8F9;
 }
 
-.navy .chapter li a.active {
-    color: #67D6ED;
-    background: rgba(103, 214, 237, 0.1);
+.navy .sidebar .sidebar-scrollbox .chapter li a.active {
+    color: #67E8F9;
+    background: rgba(103, 232, 249, 0.08);
     font-weight: 600;
+}
+
+.navy .sidebar .sidebar-scrollbox .chapter li.part-title {
+    color: #94A3B8;
 }
 
 .navy pre {
     border: 1px solid rgba(255, 255, 255, 0.06);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
 }
 
 .navy blockquote {
-    border-left-color: #0891B2;
-    background: rgba(255, 255, 255, 0.03);
+    border-left-color: #22D3EE;
+    background: rgba(8, 145, 178, 0.06);
 }
 
 .navy a {
-    color: #67D6ED;
+    color: #67E8F9;
     text-decoration: none;
     transition: color 0.15s;
 }
@@ -385,37 +505,45 @@ blockquote p:last-child {
 }
 
 .navy .content main h1 {
-    border-bottom-color: rgba(255, 255, 255, 0.08);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .navy .content main h2 {
-    border-bottom-color: rgba(255, 255, 255, 0.05);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
 }
 
-.navy .sidebar .sidebar-scrollbox .chapter li.part-title {
-    color: #94A3B8;
-}
-
-/* ── Ayu/Coal themes — inherit navy accent ── */
+/* ══════════════════════════════════════════════
+   AYU / COAL — inherit accent colors
+   ══════════════════════════════════════════════ */
 
 .ayu, .coal {
-    --links: #67D6ED;
-    --sidebar-active: #67D6ED;
-    --icons-hover: #67D6ED;
+    --links: #67E8F9;
+    --sidebar-active: #67E8F9;
+    --icons-hover: #67E8F9;
 }
 
-.ayu .chapter li a.active,
-.coal .chapter li a.active {
-    color: #67D6ED;
-    background: rgba(103, 214, 237, 0.1);
+.ayu .sidebar .sidebar-scrollbox .chapter li a.active,
+.coal .sidebar .sidebar-scrollbox .chapter li a.active {
+    color: #67E8F9;
+    background: rgba(103, 232, 249, 0.08);
     font-weight: 600;
 }
 
 .ayu a, .coal a {
-    color: #67D6ED;
+    color: #67E8F9;
 }
 
-/* ── Responsive ── */
+.ayu .content main h1, .coal .content main h1 {
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.ayu .content main h2, .coal .content main h2 {
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+/* ══════════════════════════════════════════════
+   RESPONSIVE
+   ══════════════════════════════════════════════ */
 
 @media (max-width: 1080px) {
     .content main {
@@ -423,10 +551,26 @@ blockquote p:last-child {
     }
 
     .content main h1 {
-        font-size: 1.9em;
+        font-size: 1.8em;
     }
 
     .content main h2 {
-        font-size: 1.4em;
+        font-size: 1.35em;
+    }
+}
+
+@media (max-width: 480px) {
+    .content main {
+        padding: 16px 20px 40px;
+        font-size: 14.5px;
+    }
+
+    pre {
+        padding: 12px 14px !important;
+        font-size: 13px !important;
+    }
+
+    table th, table td {
+        padding: 8px 10px !important;
     }
 }

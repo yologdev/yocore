@@ -14,28 +14,31 @@ use serde::{Deserialize, Serialize};
 // ============================================================================
 
 pub async fn health(State(state): State<AppState>) -> impl IntoResponse {
-    let (instance_uuid, instance_name): (Option<String>, Option<String>) = state
-        .db
-        .with_read_conn(|conn| {
-            conn.query_row(
-                "SELECT uuid, instance_name FROM instance_metadata WHERE id = 1",
-                [],
-                |row| Ok((row.get(0).ok(), row.get(1).ok())),
-            )
-            .unwrap_or((None, None))
-        })
-        .await;
-
     let mut resp = serde_json::json!({
         "status": "ok",
-        "version": env!("CARGO_PKG_VERSION")
+        "version": env!("CARGO_PKG_VERSION"),
+        "storage": if state.storage.is_db() { "db" } else { "ephemeral" }
     });
 
-    if let Some(uuid) = instance_uuid {
-        resp["instance_uuid"] = serde_json::Value::String(uuid);
-    }
-    if let Some(name) = instance_name {
-        resp["instance_name"] = serde_json::Value::String(name);
+    // In DB mode, include instance UUID and name from database
+    if let Some(db) = &state.db {
+        let (instance_uuid, instance_name): (Option<String>, Option<String>) = db
+            .with_read_conn(|conn| {
+                conn.query_row(
+                    "SELECT uuid, instance_name FROM instance_metadata WHERE id = 1",
+                    [],
+                    |row| Ok((row.get(0).ok(), row.get(1).ok())),
+                )
+                .unwrap_or((None, None))
+            })
+            .await;
+
+        if let Some(uuid) = instance_uuid {
+            resp["instance_uuid"] = serde_json::Value::String(uuid);
+        }
+        if let Some(name) = instance_name {
+            resp["instance_name"] = serde_json::Value::String(name);
+        }
     }
 
     Json(resp)
@@ -55,11 +58,33 @@ pub async fn list_projects(
     State(state): State<AppState>,
     Query(query): Query<ListProjectsQuery>,
 ) -> impl IntoResponse {
+    // Ephemeral mode: return from in-memory index
+    if let Some(idx) = &state.ephemeral {
+        let all = idx.list_projects();
+        let offset = query.offset.unwrap_or(0) as usize;
+        let limit = query.limit.unwrap_or(100) as usize;
+        let total = all.len();
+        let projects: Vec<serde_json::Value> = all
+            .into_iter()
+            .skip(offset)
+            .take(limit)
+            .map(|p| {
+                serde_json::json!({
+                    "id": p.id,
+                    "name": p.name,
+                    "folder_path": p.folder_path,
+                    "created_at": p.created_at,
+                })
+            })
+            .collect();
+        return Json(serde_json::json!({ "projects": projects, "total": total })).into_response();
+    }
+
+    let db = state.db.as_ref().unwrap();
     let limit = query.limit.unwrap_or(100);
     let offset = query.offset.unwrap_or(0);
 
-    let result = state
-        .db
+    let result = db
         .with_read_conn(move |conn| {
             let mut stmt = conn.prepare(
                 "SELECT id, name, folder_path, description, repo_url, language, framework,
@@ -124,6 +149,19 @@ pub async fn create_project(
     State(state): State<AppState>,
     Json(req): Json<CreateProjectRequest>,
 ) -> impl IntoResponse {
+    // Ephemeral mode: create in-memory project
+    if let Some(idx) = &state.ephemeral {
+        let id = idx.get_or_create_project(&req.folder_path, &req.name);
+        let project = idx.get_project(&id);
+        return Json(serde_json::json!({
+            "id": id,
+            "name": project.as_ref().map(|p| &p.name).unwrap_or(&req.name),
+            "folder_path": project.as_ref().map(|p| &p.folder_path).unwrap_or(&req.folder_path),
+            "created_at": project.map(|p| p.created_at).unwrap_or_default(),
+        }))
+        .into_response();
+    }
+
     let id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now().to_rfc3339();
 
@@ -134,6 +172,8 @@ pub async fn create_project(
 
     let result = state
         .db
+        .as_ref()
+        .unwrap()
         .with_conn(move |conn| {
             conn.execute(
                 "INSERT INTO projects (id, name, folder_path, description, repo_url, language, framework, created_at, updated_at)
@@ -173,8 +213,25 @@ pub async fn get_project(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let result = state
-        .db
+    if let Some(idx) = &state.ephemeral {
+        return match idx.get_project(&id) {
+            Some(p) => Json(serde_json::json!({
+                "id": p.id,
+                "name": p.name,
+                "folder_path": p.folder_path,
+                "created_at": p.created_at,
+            }))
+            .into_response(),
+            None => (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": "Project not found" })),
+            )
+                .into_response(),
+        };
+    }
+
+    let db = state.db.as_ref().unwrap();
+    let result = db
         .with_read_conn(move |conn| {
             conn.query_row(
                 "SELECT id, name, folder_path, description, repo_url, language, framework,
@@ -229,12 +286,30 @@ pub async fn update_project(
     Path(id): Path<String>,
     Json(req): Json<UpdateProjectRequest>,
 ) -> impl IntoResponse {
+    // Ephemeral mode: update in-memory project
+    if let Some(idx) = &state.ephemeral {
+        if idx.update_project(&id, req.name) {
+            return Json(serde_json::json!({
+                "id": id,
+                "updated_at": chrono::Utc::now().to_rfc3339()
+            }))
+            .into_response();
+        }
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "Project not found" })),
+        )
+            .into_response();
+    }
+
     let now = chrono::Utc::now().to_rfc3339();
     let id_clone = id.clone();
     let now_clone = now.clone();
 
     let result = state
         .db
+        .as_ref()
+        .unwrap()
         .with_conn(move |conn| {
             // Build dynamic update query
             let mut updates = vec!["updated_at = ?"];
@@ -293,8 +368,22 @@ pub async fn delete_project(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
+    // Ephemeral mode: delete from in-memory index
+    if let Some(idx) = &state.ephemeral {
+        if idx.delete_project(&id) {
+            return StatusCode::NO_CONTENT.into_response();
+        }
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "Project not found" })),
+        )
+            .into_response();
+    }
+
     let result = state
         .db
+        .as_ref()
+        .unwrap()
         .with_conn(move |conn| conn.execute("DELETE FROM projects WHERE id = ?", [&id]))
         .await;
 
@@ -328,7 +417,26 @@ pub async fn resolve_project(
     State(state): State<AppState>,
     Query(query): Query<ResolveProjectQuery>,
 ) -> impl IntoResponse {
-    let db = state.db.clone();
+    if let Some(idx) = &state.ephemeral {
+        let path = query.path;
+        return match idx.resolve_project_by_folder(&path) {
+            Some(p) => Json(serde_json::json!({
+                "id": p.id,
+                "name": p.name,
+                "folder_path": p.folder_path,
+            }))
+            .into_response(),
+            None => (
+                StatusCode::NOT_FOUND,
+                Json(
+                    serde_json::json!({ "error": format!("No project found for path: {}", path) }),
+                ),
+            )
+                .into_response(),
+        };
+    }
+
+    let db = state.db.clone().unwrap();
     let path = query.path;
     let path_for_error = path.clone();
 
@@ -440,8 +548,37 @@ pub async fn get_project_analytics(
     State(state): State<AppState>,
     Path(project_id): Path<String>,
 ) -> impl IntoResponse {
+    // Ephemeral mode: return zeroed analytics
+    if state.db.is_none() {
+        return Json(ProjectAnalyticsBatch {
+            stats: ProjectStats {
+                total_sessions: 0,
+                total_messages: 0,
+                total_duration_ms: 0,
+                messages_with_errors: 0,
+                total_input_tokens: 0,
+                total_output_tokens: 0,
+                total_cache_read_tokens: 0,
+                total_cache_creation_tokens: 0,
+                models_used: std::collections::HashMap::new(),
+                user_messages: 0,
+                assistant_messages: 0,
+                tool_uses: 0,
+                tool_results: 0,
+            },
+            session_metrics: vec![],
+            active_dates: vec![],
+            daily_tokens: vec![],
+            daily_errors: vec![],
+            daily_vibe: vec![],
+        })
+        .into_response();
+    }
+
     let result = state
         .db
+        .as_ref()
+        .unwrap()
         .with_read_conn(move |conn| {
             // 1. Project Stats
             let total_sessions: i64 = conn
@@ -692,13 +829,41 @@ pub async fn list_sessions(
     State(state): State<AppState>,
     Query(query): Query<ListSessionsQuery>,
 ) -> impl IntoResponse {
+    // Ephemeral mode
+    if let Some(idx) = &state.ephemeral {
+        let include_hidden = query.include_hidden.unwrap_or(false);
+        let all = idx.list_sessions_filtered(query.project_id.as_deref(), include_hidden);
+        let offset = query.offset.unwrap_or(0) as usize;
+        let limit = query.limit.unwrap_or(50) as usize;
+        let total = all.len();
+        let sessions: Vec<serde_json::Value> = all
+            .into_iter()
+            .skip(offset)
+            .take(limit)
+            .map(|s| {
+                serde_json::json!({
+                    "id": s.id,
+                    "project_id": s.project_id,
+                    "file_path": s.file_path,
+                    "title": s.title,
+                    "ai_tool": s.ai_tool,
+                    "message_count": s.message_count,
+                    "has_code": s.has_code,
+                    "has_errors": s.has_errors,
+                    "created_at": s.created_at,
+                })
+            })
+            .collect();
+        return Json(serde_json::json!({ "sessions": sessions, "total": total })).into_response();
+    }
+
+    let db = state.db.as_ref().unwrap();
     let limit = query.limit.unwrap_or(50);
     let offset = query.offset.unwrap_or(0);
     let include_hidden = query.include_hidden.unwrap_or(false);
     let project_id_input = query.project_id.clone();
 
-    let result = state
-        .db
+    let result = db
         .with_read_conn(move |conn| {
             // Resolve folder-path-based ID to actual UUID if provided
             let project_id = project_id_input
@@ -812,8 +977,30 @@ pub async fn get_session(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let result = state
-        .db
+    if let Some(idx) = &state.ephemeral {
+        return match idx.get_session(&id) {
+            Some(s) => Json(serde_json::json!({
+                "id": s.id,
+                "project_id": s.project_id,
+                "file_path": s.file_path,
+                "title": s.title,
+                "ai_tool": s.ai_tool,
+                "message_count": s.message_count,
+                "has_code": s.has_code,
+                "has_errors": s.has_errors,
+                "created_at": s.created_at,
+            }))
+            .into_response(),
+            None => (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": "Session not found" })),
+            )
+                .into_response(),
+        };
+    }
+
+    let db = state.db.as_ref().unwrap();
+    let result = db
         .with_read_conn(move |conn| {
             conn.query_row(
                 "SELECT id, project_id, file_path, title, ai_tool, message_count,
@@ -866,12 +1053,30 @@ pub async fn update_session(
     Path(id): Path<String>,
     Json(req): Json<UpdateSessionRequest>,
 ) -> impl IntoResponse {
+    // Ephemeral mode: update in-memory session
+    if let Some(idx) = &state.ephemeral {
+        if idx.update_session(&id, req.title, req.is_hidden) {
+            return Json(serde_json::json!({
+                "id": id,
+                "updated_at": chrono::Utc::now().to_rfc3339()
+            }))
+            .into_response();
+        }
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "Session not found" })),
+        )
+            .into_response();
+    }
+
     let now = chrono::Utc::now().to_rfc3339();
     let id_clone = id.clone();
     let now_clone = now.clone();
 
     let result = state
         .db
+        .as_ref()
+        .unwrap()
         .with_conn(move |conn| {
             let mut updates = vec!["indexed_at = ?"];
             let mut params: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(now_clone)];
@@ -914,8 +1119,22 @@ pub async fn delete_session(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
+    // Ephemeral mode: delete from in-memory index
+    if let Some(idx) = &state.ephemeral {
+        if idx.delete_session(&id) {
+            return StatusCode::NO_CONTENT.into_response();
+        }
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "Session not found" })),
+        )
+            .into_response();
+    }
+
     let result = state
         .db
+        .as_ref()
+        .unwrap()
         .with_conn(move |conn| conn.execute("DELETE FROM sessions WHERE id = ?", [&id]))
         .await;
 
@@ -945,13 +1164,49 @@ pub async fn get_session_messages(
     Path(session_id): Path<String>,
     Query(query): Query<GetMessagesQuery>,
 ) -> impl IntoResponse {
+    // Ephemeral mode
+    if let Some(idx) = &state.ephemeral {
+        let all = idx.get_messages(&session_id);
+        let offset = query.offset.unwrap_or(0) as usize;
+        let limit = query.limit.map(|l| l as usize).unwrap_or(all.len());
+        let total = all.len();
+        let messages: Vec<serde_json::Value> = all
+            .into_iter()
+            .skip(offset)
+            .take(limit)
+            .map(|m| {
+                serde_json::json!({
+                    "session_id": session_id,
+                    "sequence_num": m.sequence_num,
+                    "role": m.role,
+                    "content_preview": m.content_preview,
+                    "has_code": m.has_code,
+                    "has_error": m.has_error,
+                    "has_file_changes": m.has_file_changes,
+                    "tool_name": m.tool_name,
+                    "tool_type": m.tool_type,
+                    "tool_summary": m.tool_summary,
+                    "byte_offset": m.byte_offset,
+                    "byte_length": m.byte_length,
+                    "input_tokens": m.input_tokens,
+                    "output_tokens": m.output_tokens,
+                    "cache_read_tokens": m.cache_read_tokens,
+                    "cache_creation_tokens": m.cache_creation_tokens,
+                    "model": m.model,
+                    "timestamp": m.timestamp,
+                })
+            })
+            .collect();
+        return Json(serde_json::json!({ "messages": messages, "total": total })).into_response();
+    }
+
+    let db = state.db.as_ref().unwrap();
     // Default to no limit (return all messages) when not specified
     // Desktop expects all messages for timeline rendering
     let limit = query.limit.unwrap_or(i64::MAX);
     let offset = query.offset.unwrap_or(0);
 
-    let result = state
-        .db
+    let result = db
         .with_read_conn(move |conn| {
             let session_id_clone = session_id.clone();
             let mut stmt = conn.prepare(
@@ -1023,43 +1278,53 @@ pub async fn get_message_content(
     State(state): State<AppState>,
     Path((session_id, seq)): Path<(String, i64)>,
 ) -> impl IntoResponse {
-    // Get the file path and byte offset from database
-    let db_result = state
-        .db
-        .with_read_conn(move |conn| {
-            conn.query_row(
-                "SELECT s.file_path, m.byte_offset, m.byte_length
-                 FROM session_messages m
-                 JOIN sessions s ON s.id = m.session_id
-                 WHERE m.session_id = ? AND m.sequence_num = ?",
-                rusqlite::params![session_id, seq],
-                |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, i64>(1)?,
-                        row.get::<_, i64>(2)?,
-                    ))
-                },
-            )
-        })
-        .await;
-
-    let (file_path, byte_offset, byte_length) = match db_result {
-        Ok(result) => result,
-        Err(rusqlite::Error::QueryReturnedNoRows) => {
-            return (
+    // Get file_path + byte_offset + byte_length from the appropriate backend
+    let lookup = if let Some(idx) = &state.ephemeral {
+        let session = idx.get_session(&session_id);
+        let message = idx.get_message(&session_id, seq);
+        match (session, message) {
+            (Some(s), Some(m)) => Ok((s.file_path, m.byte_offset, m.byte_length)),
+            _ => Err((
                 StatusCode::NOT_FOUND,
                 Json(serde_json::json!({ "error": "Message not found" })),
-            )
-                .into_response()
+            )),
         }
-        Err(e) => {
-            return (
+    } else {
+        let db = state.db.as_ref().unwrap();
+        let db_result = db
+            .with_read_conn(move |conn| {
+                conn.query_row(
+                    "SELECT s.file_path, m.byte_offset, m.byte_length
+                     FROM session_messages m
+                     JOIN sessions s ON s.id = m.session_id
+                     WHERE m.session_id = ? AND m.sequence_num = ?",
+                    rusqlite::params![session_id, seq],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, i64>(1)?,
+                            row.get::<_, i64>(2)?,
+                        ))
+                    },
+                )
+            })
+            .await;
+        match db_result {
+            Ok(r) => Ok(r),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Err((
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": "Message not found" })),
+            )),
+            Err(e) => Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({ "error": e.to_string() })),
-            )
-                .into_response()
+            )),
         }
+    };
+
+    let (file_path, byte_offset, byte_length) = match lookup {
+        Ok(result) => result,
+        Err(resp) => return resp.into_response(),
     };
 
     // Read file content in spawn_blocking to avoid blocking async runtime
@@ -1123,6 +1388,10 @@ pub async fn search(
     State(state): State<AppState>,
     Json(req): Json<SearchRequest>,
 ) -> impl IntoResponse {
+    if state.db.is_none() {
+        return Json(serde_json::json!({ "results": [], "total": 0 })).into_response();
+    }
+
     let limit = req.limit.unwrap_or(100);
     let query_str = req.query.clone();
     let project_id = req.project_id.clone();
@@ -1131,6 +1400,8 @@ pub async fn search(
 
     let result = state
         .db
+        .as_ref()
+        .unwrap()
         .with_read_conn(move |conn| {
             // Build filter clauses
             let mut filter_clauses = String::new();
@@ -1252,11 +1523,17 @@ pub async fn search_session(
     Path(session_id): Path<String>,
     Query(query): Query<SearchSessionQuery>,
 ) -> impl IntoResponse {
+    if state.db.is_none() {
+        return Json(serde_json::json!({ "results": [], "total": 0 })).into_response();
+    }
+
     let limit = query.limit.unwrap_or(50);
     let search_query = query.q.clone();
 
     let result = state
         .db
+        .as_ref()
+        .unwrap()
         .with_read_conn(move |conn| {
             let sql = format!(
                 "SELECT m.sequence_num, m.content_preview, m.timestamp,
@@ -1321,25 +1598,37 @@ pub async fn read_session_bytes(
     let offset = query.offset.unwrap_or(0);
 
     // Get file path from session
-    let file_path_result = state
-        .db
-        .with_read_conn(move |conn| {
-            conn.query_row(
-                "SELECT file_path FROM sessions WHERE id = ?",
-                [&session_id],
-                |row| row.get::<_, String>(0),
-            )
-        })
-        .await;
-
-    let file_path = match file_path_result {
-        Ok(p) => p,
-        Err(_) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({ "error": "Session not found" })),
-            )
-                .into_response();
+    let file_path = if let Some(idx) = &state.ephemeral {
+        match idx.get_session(&session_id) {
+            Some(s) => s.file_path,
+            None => {
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(serde_json::json!({ "error": "Session not found" })),
+                )
+                    .into_response();
+            }
+        }
+    } else {
+        let db = state.db.as_ref().unwrap();
+        match db
+            .with_read_conn(move |conn| {
+                conn.query_row(
+                    "SELECT file_path FROM sessions WHERE id = ?",
+                    [&session_id],
+                    |row| row.get::<_, String>(0),
+                )
+            })
+            .await
+        {
+            Ok(p) => p,
+            Err(_) => {
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(serde_json::json!({ "error": "Session not found" })),
+                )
+                    .into_response();
+            }
         }
     };
 
@@ -1424,8 +1713,18 @@ pub async fn append_session_messages(
     Path(session_id): Path<String>,
     Json(req): Json<AppendMessagesRequest>,
 ) -> impl IntoResponse {
+    if state.db.is_none() {
+        return (
+            StatusCode::NOT_IMPLEMENTED,
+            Json(serde_json::json!({ "error": "Not available in ephemeral mode" })),
+        )
+            .into_response();
+    }
+
     let result = state
         .db
+        .as_ref()
+        .unwrap()
         .with_conn(move |conn| {
             // Get current max sequence_num
             let max_seq: i64 = conn
@@ -1512,8 +1811,18 @@ pub async fn update_agent_summary(
     Path(session_id): Path<String>,
     Json(req): Json<UpdateAgentSummaryRequest>,
 ) -> impl IntoResponse {
+    if state.db.is_none() {
+        return (
+            StatusCode::NOT_IMPLEMENTED,
+            Json(serde_json::json!({ "error": "Not available in ephemeral mode" })),
+        )
+            .into_response();
+    }
+
     let result = state
         .db
+        .as_ref()
+        .unwrap()
         .with_conn(move |conn| {
             // Check if agent summary message already exists
             let existing: Option<i64> = conn
@@ -1651,8 +1960,14 @@ pub async fn list_memories(
     State(state): State<AppState>,
     Query(query): Query<ListMemoriesQuery>,
 ) -> impl IntoResponse {
+    if state.db.is_none() {
+        return Json(serde_json::json!({ "memories": [], "total": 0 })).into_response();
+    }
+
     let result = state
         .db
+        .as_ref()
+        .unwrap()
         .with_read_conn(move |conn| {
             let limit = query.limit.unwrap_or(100);
             let offset = query.offset.unwrap_or(0);
@@ -1828,10 +2143,14 @@ pub async fn search_memories(
     State(state): State<AppState>,
     Json(req): Json<SearchMemoriesRequest>,
 ) -> impl IntoResponse {
+    if state.db.is_none() {
+        return Json(serde_json::json!({ "memories": [], "total": 0 })).into_response();
+    }
+
     let limit = req.limit.unwrap_or(20) as usize;
     let query_str = req.query.clone();
     let project_id_input = req.project_id.clone();
-    let db = state.db.clone();
+    let db = state.db.clone().unwrap();
 
     let result = tokio::task::spawn_blocking(move || {
         // Resolve folder-path-based ID to actual UUID if provided
@@ -1892,7 +2211,7 @@ pub async fn search_memories(
             // Track access for returned memories (feeds into ranking)
             if !memories.is_empty() {
                 let memory_ids: Vec<i64> = memories.iter().map(|m| m.id).collect();
-                let db = state.db.clone();
+                let db = state.db.clone().unwrap();
                 tokio::task::spawn_blocking(move || {
                     let mcp_db = crate::mcp::db::McpDb::new(db);
                     let _ = mcp_db.track_memory_access(&memory_ids);
@@ -1937,8 +2256,18 @@ fn memory_to_api_json(memory: crate::mcp::types::Memory) -> serde_json::Value {
 }
 
 pub async fn get_memory(State(state): State<AppState>, Path(id): Path<i64>) -> impl IntoResponse {
+    if state.db.is_none() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "Not found" })),
+        )
+            .into_response();
+    }
+
     let result = state
         .db
+        .as_ref()
+        .unwrap()
         .with_read_conn(move |conn| {
             conn.query_row(
                 "SELECT id, project_id, session_id, memory_type, title, content,
@@ -1992,6 +2321,14 @@ pub async fn update_memory(
     Path(id): Path<i64>,
     Json(req): Json<UpdateMemoryRequest>,
 ) -> impl IntoResponse {
+    if state.db.is_none() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "Not found" })),
+        )
+            .into_response();
+    }
+
     // Early return if no updates
     if req.state.is_none() && req.confidence.is_none() && req.is_validated.is_none() {
         return Json(serde_json::json!({ "id": id })).into_response();
@@ -1999,6 +2336,8 @@ pub async fn update_memory(
 
     let result = state
         .db
+        .as_ref()
+        .unwrap()
         .with_conn(move |conn| {
             let mut updates = vec![];
             let mut params: Vec<Box<dyn rusqlite::ToSql>> = vec![];
@@ -2045,9 +2384,19 @@ pub async fn delete_memory(
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> impl IntoResponse {
+    if state.db.is_none() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "Not found" })),
+        )
+            .into_response();
+    }
+
     // Soft delete by setting state to 'removed'
     let result = state
         .db
+        .as_ref()
+        .unwrap()
         .with_conn(move |conn| {
             conn.execute("UPDATE memories SET state = 'removed' WHERE id = ?", [id])
         })
@@ -2090,8 +2439,21 @@ pub async fn get_memory_stats(
     State(state): State<AppState>,
     Path(project_id): Path<String>,
 ) -> impl IntoResponse {
+    if state.db.is_none() {
+        return Json(MemoryStatsResponse {
+            total_count: 0,
+            by_type: vec![],
+            validated_count: 0,
+            avg_confidence: 0.0,
+            sessions_with_memories: 0,
+        })
+        .into_response();
+    }
+
     let result = state
         .db
+        .as_ref()
+        .unwrap()
         .with_read_conn(move |conn| {
             // Total count (excluding removed)
             let total_count: i64 = conn
@@ -2181,8 +2543,14 @@ pub async fn get_memory_tags(
     State(state): State<AppState>,
     Path(project_id): Path<String>,
 ) -> impl IntoResponse {
+    if state.db.is_none() {
+        return Json(serde_json::json!({ "tags": [] })).into_response();
+    }
+
     let result = state
         .db
+        .as_ref()
+        .unwrap()
         .with_read_conn(move |conn| {
             // Get all tags from memories (stored as JSON arrays)
             let mut stmt = conn.prepare(
@@ -2235,14 +2603,16 @@ pub async fn get_memory_tags(
 // ============================================================================
 
 use crate::ai::cli::detect_claude_code;
-use crate::ai::title::{generate_title, store_title};
+use crate::ai::title::{generate_title, generate_title_from_text, store_title};
 use crate::ai::types::AiEvent;
 use crate::config::Config;
 
-/// Check if a specific AI feature is enabled in config.toml
+use crate::config::AiFeature;
+
+/// Check if a specific AI feature is active in config.toml
 fn check_ai_feature(
     state: &AppState,
-    feature: &str,
+    feature: AiFeature,
 ) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
     let config = Config::from_file(&state.config_path).map_err(|e| {
         (
@@ -2251,24 +2621,12 @@ fn check_ai_feature(
         )
     })?;
 
-    if !config.ai.enabled {
+    if !config.is_feature_active(feature) {
         return Err((
             StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": "AI features are disabled" })),
-        ));
-    }
-
-    let feature_enabled = match feature {
-        "title_generation" => config.ai.features.title_generation,
-        "memory_extraction" => config.ai.features.memory_extraction,
-        "skills_discovery" => config.ai.features.skills_discovery,
-        _ => false,
-    };
-
-    if !feature_enabled {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": format!("AI feature '{}' is disabled", feature) })),
+            Json(
+                serde_json::json!({ "error": format!("AI feature '{:?}' is not active", feature) }),
+            ),
         ));
     }
 
@@ -2300,8 +2658,14 @@ pub struct PendingAiSession {
 /// Get sessions that need AI processing (title, memories, skills)
 /// Used for startup recovery when Desktop starts
 pub async fn get_pending_ai_sessions(State(state): State<AppState>) -> impl IntoResponse {
+    if state.db.is_none() {
+        return Json(serde_json::json!({ "sessions": [] })).into_response();
+    }
+
     let result = state
         .db
+        .as_ref()
+        .unwrap()
         .with_read_conn(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT
@@ -2459,8 +2823,25 @@ pub struct SessionLimitInfo {
 
 /// Get session limit info (all features now free - unlimited)
 pub async fn get_session_limit_info(State(state): State<AppState>) -> impl IntoResponse {
+    if state.db.is_none() {
+        let count = state
+            .ephemeral
+            .as_ref()
+            .map(|idx| idx.session_count())
+            .unwrap_or(0);
+        return Json(serde_json::json!({
+            "current_sessions": count,
+            "max_sessions": null,
+            "is_limited": false,
+            "storage": "ephemeral"
+        }))
+        .into_response();
+    }
+
     let count = state
         .db
+        .as_ref()
+        .unwrap()
         .with_read_conn(|conn| {
             conn.query_row("SELECT COUNT(*) FROM sessions", [], |row| {
                 row.get::<_, i64>(0)
@@ -2476,6 +2857,7 @@ pub async fn get_session_limit_info(State(state): State<AppState>) -> impl IntoR
         remaining: -1,
         at_limit: false,
     })
+    .into_response()
 }
 
 #[derive(Debug, Deserialize)]
@@ -2490,17 +2872,92 @@ pub async fn trigger_title_generation(
     Path(session_id): Path<String>,
     body: Option<Json<TitleGenerationRequest>>,
 ) -> impl IntoResponse {
-    if let Err(resp) = check_ai_feature(&state, "title_generation") {
+    if let Err(resp) = check_ai_feature(&state, AiFeature::TitleGeneration) {
         return resp.into_response();
     }
 
     let force = body.map(|b| b.force).unwrap_or(false);
+
+    // Ephemeral mode: generate title from in-memory messages
+    if let Some(idx) = &state.ephemeral {
+        if !force && idx.has_title(&session_id) {
+            return (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "status": "skipped",
+                    "message": "Title already generated"
+                })),
+            )
+                .into_response();
+        }
+
+        let first_messages = match idx.get_first_user_messages(&session_id, 10, 4000) {
+            Some(m) => m,
+            None => {
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(serde_json::json!({ "error": "No user messages found" })),
+                )
+                    .into_response()
+            }
+        };
+
+        let permit = match state.ai_task_queue.acquire().await {
+            Ok(p) => p,
+            Err(e) => {
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(serde_json::json!({ "error": e })),
+                )
+                    .into_response()
+            }
+        };
+
+        let idx = idx.clone();
+        let ai_event_tx = state.ai_event_tx.clone();
+        let sid = session_id.clone();
+
+        tokio::spawn(async move {
+            let _permit = permit;
+            let _ = ai_event_tx.send(AiEvent::TitleStart {
+                session_id: sid.clone(),
+            });
+
+            let result = generate_title_from_text(&sid, &first_messages, None).await;
+
+            if let Some(ref title) = result.title {
+                idx.update_session(&sid, Some(title.clone()), None);
+                idx.set_title_generated(&sid);
+                let _ = ai_event_tx.send(AiEvent::TitleComplete {
+                    session_id: sid,
+                    title: title.clone(),
+                });
+            } else if let Some(error) = result.error {
+                let _ = ai_event_tx.send(AiEvent::TitleError {
+                    session_id: sid,
+                    error,
+                });
+            }
+        });
+
+        return (
+            StatusCode::ACCEPTED,
+            Json(serde_json::json!({
+                "status": "started",
+                "session_id": session_id,
+                "message": "Title generation started. Listen to SSE for progress."
+            })),
+        )
+            .into_response();
+    }
 
     // Check if session already has AI-generated or user-edited title (unless force)
     if !force {
         let session_id_clone = session_id.clone();
         let skip_reason = state
             .db
+            .as_ref()
+            .unwrap()
             .with_conn(move |conn| {
                 conn.query_row(
                     "SELECT COALESCE(title_ai_generated, 0), COALESCE(title_edited, 0) FROM sessions WHERE id = ?",
@@ -2562,7 +3019,7 @@ pub async fn trigger_title_generation(
     };
 
     // Clone values for the spawned task
-    let db = state.db.clone();
+    let db = state.db.clone().unwrap();
     let ai_event_tx = state.ai_event_tx.clone();
     let session_id_for_task = session_id.clone();
 
@@ -2625,7 +3082,7 @@ pub async fn trigger_memory_extraction(
     Path(session_id): Path<String>,
     body: Option<Json<MemoryExtractionRequest>>,
 ) -> impl IntoResponse {
-    if let Err(resp) = check_ai_feature(&state, "memory_extraction") {
+    if let Err(resp) = check_ai_feature(&state, AiFeature::MemoryExtraction) {
         return resp.into_response();
     }
 
@@ -2635,6 +3092,8 @@ pub async fn trigger_memory_extraction(
     let session_id_clone = session_id.clone();
     let session_exists = state
         .db
+        .as_ref()
+        .unwrap()
         .with_conn(move |conn| {
             conn.query_row(
                 "SELECT 1 FROM sessions WHERE id = ?",
@@ -2675,7 +3134,7 @@ pub async fn trigger_memory_extraction(
     };
 
     // Clone values for the spawned task
-    let db = state.db.clone();
+    let db = state.db.clone().unwrap();
     let ai_event_tx = state.ai_event_tx.clone();
     let session_id_for_task = session_id.clone();
 
@@ -2730,7 +3189,7 @@ pub async fn trigger_skill_extraction(
     Path(session_id): Path<String>,
     body: Option<Json<SkillExtractionRequest>>,
 ) -> impl IntoResponse {
-    if let Err(resp) = check_ai_feature(&state, "skills_discovery") {
+    if let Err(resp) = check_ai_feature(&state, AiFeature::SkillsDiscovery) {
         return resp.into_response();
     }
 
@@ -2740,6 +3199,8 @@ pub async fn trigger_skill_extraction(
     let session_id_clone = session_id.clone();
     let session_exists = state
         .db
+        .as_ref()
+        .unwrap()
         .with_conn(move |conn| {
             conn.query_row(
                 "SELECT 1 FROM sessions WHERE id = ?",
@@ -2780,7 +3241,7 @@ pub async fn trigger_skill_extraction(
     };
 
     // Clone values for the spawned task
-    let db = state.db.clone();
+    let db = state.db.clone().unwrap();
     let ai_event_tx = state.ai_event_tx.clone();
     let session_id_for_task = session_id.clone();
 
@@ -2832,8 +3293,14 @@ pub async fn get_session_markers(
     State(state): State<AppState>,
     Path(session_id): Path<String>,
 ) -> impl IntoResponse {
+    if state.db.is_none() {
+        return Json(serde_json::json!({ "markers": [] })).into_response();
+    }
+
     let result = state
         .db
+        .as_ref()
+        .unwrap()
         .with_read_conn(move |conn| crate::ai::marker::get_markers(conn, &session_id))
         .await;
 
@@ -2852,8 +3319,18 @@ pub async fn delete_marker(
     State(state): State<AppState>,
     Path(marker_id): Path<i64>,
 ) -> impl IntoResponse {
+    if state.db.is_none() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "Not found" })),
+        )
+            .into_response();
+    }
+
     let result = state
         .db
+        .as_ref()
+        .unwrap()
         .with_conn(move |conn| crate::ai::marker::delete_marker_by_id(conn, marker_id))
         .await;
 
@@ -2877,7 +3354,7 @@ pub async fn trigger_marker_detection(
     State(state): State<AppState>,
     Path(session_id): Path<String>,
 ) -> impl IntoResponse {
-    if let Err(resp) = check_ai_feature(&state, "skills_discovery") {
+    if let Err(resp) = check_ai_feature(&state, AiFeature::MarkerDetection) {
         return resp.into_response();
     }
 
@@ -2885,6 +3362,8 @@ pub async fn trigger_marker_detection(
     let session_id_clone = session_id.clone();
     let session_exists = state
         .db
+        .as_ref()
+        .unwrap()
         .with_conn(move |conn| {
             conn.query_row(
                 "SELECT 1 FROM sessions WHERE id = ?",
@@ -2925,7 +3404,7 @@ pub async fn trigger_marker_detection(
     };
 
     // Clone values for the spawned task
-    let db = state.db.clone();
+    let db = state.db.clone().unwrap();
     let ai_event_tx = state.ai_event_tx.clone();
     let session_id_for_task = session_id.clone();
 
@@ -2979,12 +3458,19 @@ pub async fn rank_project_memories(
     Path(project_id): Path<String>,
     Query(query): Query<RankMemoriesQuery>,
 ) -> impl IntoResponse {
+    if state.db.is_none() {
+        return Json(serde_json::json!({ "promoted": 0, "demoted": 0, "removed": 0 }))
+            .into_response();
+    }
+
     let batch_size = query.batch_size.unwrap_or(500);
     let project_id_clone = project_id.clone();
 
     // Verify project exists
     let exists = state
         .db
+        .as_ref()
+        .unwrap()
         .with_read_conn(move |conn| {
             conn.query_row(
                 "SELECT 1 FROM projects WHERE id = ?",
@@ -3006,7 +3492,7 @@ pub async fn rank_project_memories(
     }
 
     // Run ranking in spawn_blocking since it uses sync database access
-    let db = state.db.clone();
+    let db = state.db.clone().unwrap();
     let project_id_for_ranking = project_id.clone();
 
     let result = tokio::task::spawn_blocking(move || {
@@ -3047,11 +3533,24 @@ pub async fn get_ranking_stats(
     State(state): State<AppState>,
     Path(project_id): Path<String>,
 ) -> impl IntoResponse {
+    if state.db.is_none() {
+        return Json(serde_json::json!({
+            "project_id": project_id,
+            "total_memories": 0,
+            "by_state": {},
+            "avg_confidence": 0.0,
+            "last_ranked_at": null
+        }))
+        .into_response();
+    }
+
     let project_id_clone = project_id.clone();
 
     // Verify project exists
     let exists = state
         .db
+        .as_ref()
+        .unwrap()
         .with_read_conn(move |conn| {
             conn.query_row(
                 "SELECT 1 FROM projects WHERE id = ?",
@@ -3073,7 +3572,7 @@ pub async fn get_ranking_stats(
     }
 
     // Run stats query in spawn_blocking since it uses sync database access
-    let db = state.db.clone();
+    let db = state.db.clone().unwrap();
     let project_id_for_stats = project_id.clone();
 
     let result = tokio::task::spawn_blocking(move || {
@@ -3139,12 +3638,18 @@ pub async fn list_project_skills(
     Path(project_id): Path<String>,
     Query(query): Query<ListSkillsQuery>,
 ) -> impl IntoResponse {
+    if state.db.is_none() {
+        return Json(serde_json::json!({ "skills": [], "total": 0 })).into_response();
+    }
+
     let limit = query.limit.unwrap_or(20);
     let offset = query.offset.unwrap_or(0);
     let sort_by = query.sort_by.clone();
 
     let result = state
         .db
+        .as_ref()
+        .unwrap()
         .with_read_conn(move |conn| {
             // First, get the total count
             let total: i64 = conn
@@ -3304,8 +3809,19 @@ pub async fn get_skill_stats(
     State(state): State<AppState>,
     Path(project_id): Path<String>,
 ) -> impl IntoResponse {
+    if state.db.is_none() {
+        return Json(serde_json::json!({
+            "total_skills": 0,
+            "unique_skills": 0,
+            "sessions_with_skills": 0
+        }))
+        .into_response();
+    }
+
     let result = state
         .db
+        .as_ref()
+        .unwrap()
         .with_read_conn(move |conn| {
             let total_skills: i64 = conn
                 .query_row(
@@ -3351,7 +3867,11 @@ pub async fn get_skill_stats(
 
 /// Backfill embeddings for memories that don't have them yet
 pub async fn backfill_embeddings(State(state): State<AppState>) -> impl IntoResponse {
-    let db = state.db.clone();
+    if state.db.is_none() {
+        return Json(serde_json::json!({ "processed": 0 })).into_response();
+    }
+
+    let db = state.db.clone().unwrap();
 
     // Get memories without embeddings
     let memories_to_embed: Vec<(i64, String, String)> = match db
@@ -3447,8 +3967,18 @@ pub async fn delete_skill_by_id(
     State(state): State<AppState>,
     Path(skill_id): Path<i64>,
 ) -> impl IntoResponse {
+    if state.db.is_none() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "Not found" })),
+        )
+            .into_response();
+    }
+
     let result = state
         .db
+        .as_ref()
+        .unwrap()
         .with_conn(move |conn| conn.execute("DELETE FROM skills WHERE id = ?", [skill_id]))
         .await;
 

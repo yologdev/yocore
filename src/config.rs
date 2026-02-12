@@ -7,9 +7,72 @@ use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
+/// Storage backend
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum Storage {
+    /// SQLite database — full history, search, persistence (default)
+    #[default]
+    Db,
+    /// In-memory only — no database, no persistence, data lost on restart
+    Ephemeral,
+}
+
+impl Storage {
+    pub fn is_db(&self) -> bool {
+        matches!(self, Storage::Db)
+    }
+
+    pub fn is_ephemeral(&self) -> bool {
+        matches!(self, Storage::Ephemeral)
+    }
+}
+
+/// Ephemeral storage limits (only used when storage = "ephemeral")
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EphemeralConfig {
+    /// Maximum sessions to keep in memory (LRU eviction)
+    #[serde(default = "default_max_sessions")]
+    pub max_sessions: usize,
+
+    /// Maximum messages per session
+    #[serde(default = "default_max_messages_per_session")]
+    pub max_messages_per_session: usize,
+}
+
+fn default_max_sessions() -> usize {
+    100
+}
+
+fn default_max_messages_per_session() -> usize {
+    50
+}
+
+impl Default for EphemeralConfig {
+    fn default() -> Self {
+        EphemeralConfig {
+            max_sessions: default_max_sessions(),
+            max_messages_per_session: default_max_messages_per_session(),
+        }
+    }
+}
+
+/// AI feature identifier for feature gating
+#[derive(Debug, Clone, Copy)]
+pub enum AiFeature {
+    TitleGeneration,
+    MarkerDetection,
+    MemoryExtraction,
+    SkillsDiscovery,
+}
+
 /// Main configuration structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
+    /// Storage backend: "db" (default) or "ephemeral"
+    #[serde(default)]
+    pub storage: Storage,
+
     /// Server configuration
     #[serde(default)]
     pub server: ServerConfig,
@@ -21,6 +84,14 @@ pub struct Config {
     /// AI feature configuration
     #[serde(default)]
     pub ai: AiConfig,
+
+    /// Background scheduler task configuration
+    #[serde(default)]
+    pub scheduler: SchedulerConfig,
+
+    /// Ephemeral storage limits
+    #[serde(default)]
+    pub ephemeral: EphemeralConfig,
 
     /// Data directory (defaults to ~/.yolog)
     #[serde(default = "default_data_dir")]
@@ -117,36 +188,56 @@ fn default_true() -> bool {
 }
 
 /// AI feature configuration
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+///
+/// AI is active when `provider` is set and at least one feature toggle is true.
+/// Features requiring persistence (marker_detection, memory_extraction, skills_discovery)
+/// are automatically skipped when `storage = "ephemeral"`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AiConfig {
-    /// Whether AI features are enabled
-    #[serde(default)]
-    pub enabled: bool,
-
-    /// AI provider (anthropic, openai, etc.)
+    /// AI provider ("claude_code" for CLI mode). Required for any AI feature.
     #[serde(default)]
     pub provider: Option<String>,
 
-    /// AI feature toggles
-    #[serde(default)]
-    pub features: AiFeatures,
-}
-
-/// Individual AI feature toggles
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AiFeatures {
-    /// Generate session titles
+    /// Generate session titles (works with both storage modes)
     #[serde(default = "default_true")]
     pub title_generation: bool,
 
-    /// Discover skills from sessions
+    /// Detect markers in sessions (requires storage = "db")
     #[serde(default = "default_true")]
-    pub skills_discovery: bool,
+    pub marker_detection: bool,
 
-    /// Extract memories from sessions
+    /// Extract memories from sessions (requires storage = "db")
     #[serde(default = "default_true")]
     pub memory_extraction: bool,
 
+    /// Discover skills from sessions (requires storage = "db")
+    #[serde(default = "default_true")]
+    pub skills_discovery: bool,
+
+    // Legacy fields for backward compatibility — not serialized
+    /// Deprecated: AI is now active when provider is set + any feature is on
+    #[serde(default, skip_serializing)]
+    enabled: Option<bool>,
+
+    /// Deprecated: features are now flat fields in [ai]
+    #[serde(default, skip_serializing)]
+    features: Option<LegacyAiFeatures>,
+}
+
+/// Legacy [ai.features] section — only used for backward-compatible deserialization
+#[derive(Debug, Clone, Deserialize)]
+struct LegacyAiFeatures {
+    #[serde(default = "default_true")]
+    title_generation: bool,
+    #[serde(default = "default_true")]
+    skills_discovery: bool,
+    #[serde(default = "default_true")]
+    memory_extraction: bool,
+}
+
+/// Background scheduler configuration
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SchedulerConfig {
     /// Memory ranking configuration
     #[serde(default)]
     pub ranking: RankingConfig,
@@ -165,12 +256,10 @@ pub struct AiFeatures {
 }
 
 /// Memory ranking configuration
+///
+/// Auto-activated when memory_extraction is enabled.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RankingConfig {
-    /// Whether automatic memory ranking is enabled
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-
     /// Interval in hours between periodic ranking sweeps
     #[serde(default = "default_ranking_interval")]
     pub interval_hours: u32,
@@ -191,7 +280,6 @@ fn default_batch_size() -> usize {
 impl Default for RankingConfig {
     fn default() -> Self {
         RankingConfig {
-            enabled: true,
             interval_hours: default_ranking_interval(),
             batch_size: default_batch_size(),
         }
@@ -199,12 +287,10 @@ impl Default for RankingConfig {
 }
 
 /// Duplicate memory cleanup configuration
+///
+/// Auto-activated when memory_extraction is enabled.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DuplicateCleanupConfig {
-    /// Whether automatic duplicate cleanup is enabled
-    #[serde(default)]
-    pub enabled: bool,
-
     /// Interval in hours between cleanup sweeps
     #[serde(default = "default_cleanup_interval")]
     pub interval_hours: u32,
@@ -229,7 +315,6 @@ fn default_similarity_threshold() -> f64 {
 impl Default for DuplicateCleanupConfig {
     fn default() -> Self {
         DuplicateCleanupConfig {
-            enabled: false, // Opt-in
             interval_hours: default_cleanup_interval(),
             similarity_threshold: default_similarity_threshold(),
             batch_size: default_batch_size(),
@@ -238,12 +323,10 @@ impl Default for DuplicateCleanupConfig {
 }
 
 /// Embedding refresh configuration
+///
+/// Auto-activated when memory_extraction is enabled.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmbeddingRefreshConfig {
-    /// Whether automatic embedding refresh is enabled
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-
     /// Interval in hours between refresh sweeps
     #[serde(default = "default_refresh_interval")]
     pub interval_hours: u32,
@@ -264,7 +347,6 @@ fn default_embed_batch_size() -> usize {
 impl Default for EmbeddingRefreshConfig {
     fn default() -> Self {
         EmbeddingRefreshConfig {
-            enabled: true,
             interval_hours: default_refresh_interval(),
             batch_size: default_embed_batch_size(),
         }
@@ -272,12 +354,10 @@ impl Default for EmbeddingRefreshConfig {
 }
 
 /// Duplicate skill cleanup configuration
+///
+/// Auto-activated when skills_discovery is enabled.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkillCleanupConfig {
-    /// Whether automatic skill cleanup is enabled
-    #[serde(default)]
-    pub enabled: bool,
-
     /// Interval in hours between cleanup sweeps
     #[serde(default = "default_cleanup_interval")]
     pub interval_hours: u32,
@@ -298,7 +378,6 @@ fn default_skill_similarity_threshold() -> f64 {
 impl Default for SkillCleanupConfig {
     fn default() -> Self {
         SkillCleanupConfig {
-            enabled: false, // Opt-in
             interval_hours: default_cleanup_interval(),
             similarity_threshold: default_skill_similarity_threshold(),
             batch_size: default_batch_size(),
@@ -306,16 +385,36 @@ impl Default for SkillCleanupConfig {
     }
 }
 
-impl Default for AiFeatures {
+impl Default for AiConfig {
     fn default() -> Self {
-        AiFeatures {
+        AiConfig {
+            provider: None,
             title_generation: true,
-            skills_discovery: true,
+            marker_detection: true,
             memory_extraction: true,
-            ranking: RankingConfig::default(),
-            duplicate_cleanup: DuplicateCleanupConfig::default(),
-            embedding_refresh: EmbeddingRefreshConfig::default(),
-            skill_cleanup: SkillCleanupConfig::default(),
+            skills_discovery: true,
+            enabled: None,
+            features: None,
+        }
+    }
+}
+
+impl AiConfig {
+    /// Apply legacy config fields for backward compatibility.
+    ///
+    /// Handles old config format where features lived in [ai.features] and
+    /// AI was gated by [ai] enabled = true/false.
+    fn apply_legacy(&mut self) {
+        // If old `enabled = false` is present, disable AI by clearing provider
+        if let Some(false) = self.enabled.take() {
+            self.provider = None;
+        }
+
+        // If old [ai.features] section is present, its values override the flat defaults
+        if let Some(features) = self.features.take() {
+            self.title_generation = features.title_generation;
+            self.skills_discovery = features.skills_discovery;
+            self.memory_extraction = features.memory_extraction;
         }
     }
 }
@@ -323,9 +422,12 @@ impl Default for AiFeatures {
 impl Default for Config {
     fn default() -> Self {
         Config {
+            storage: Storage::default(),
             server: ServerConfig::default(),
             watch: vec![],
             ai: AiConfig::default(),
+            scheduler: SchedulerConfig::default(),
+            ephemeral: EphemeralConfig::default(),
             data_dir: default_data_dir(),
         }
     }
@@ -355,9 +457,35 @@ impl Config {
         }
 
         let content = std::fs::read_to_string(&expanded_path)?;
-        let config: Config = toml::from_str(&content)?;
+        let mut config: Config = toml::from_str(&content)?;
+        config.ai.apply_legacy();
 
         Ok(config)
+    }
+
+    /// Check if a specific AI feature is active given current config.
+    ///
+    /// Returns false if provider is not set, or if the feature requires
+    /// db storage but storage is ephemeral.
+    pub fn is_feature_active(&self, feature: AiFeature) -> bool {
+        if self.ai.provider.is_none() {
+            return false;
+        }
+        match feature {
+            AiFeature::TitleGeneration => self.ai.title_generation,
+            AiFeature::MarkerDetection => self.ai.marker_detection && self.storage.is_db(),
+            AiFeature::MemoryExtraction => self.ai.memory_extraction && self.storage.is_db(),
+            AiFeature::SkillsDiscovery => self.ai.skills_discovery && self.storage.is_db(),
+        }
+    }
+
+    /// Check if any AI feature is active
+    pub fn is_ai_active(&self) -> bool {
+        self.ai.provider.is_some()
+            && (self.ai.title_generation
+                || self.ai.marker_detection
+                || self.ai.memory_extraction
+                || self.ai.skills_discovery)
     }
 
     /// Load configuration from file or use defaults
@@ -456,6 +584,11 @@ impl Config {
         // Write a well-commented config file
         let content = r#"# Yolog Core Configuration
 
+# Storage backend:
+#   "db"        — SQLite database. Full history, search, persistence. (default)
+#   "ephemeral" — In-memory only. No database, no persistence. Data lost on restart.
+storage = "db"
+
 [server]
 # Port to listen on (default: 19420)
 port = 19420
@@ -485,37 +618,39 @@ enabled = true
 # parser = "openclaw"
 # enabled = true
 
+# Ephemeral storage limits (only used when storage = "ephemeral")
+# [ephemeral]
+# max_sessions = 100
+# max_messages_per_session = 50
+
+# AI features — each toggle is independent, some require storage = "db"
+# AI is active when provider is set and at least one feature is enabled.
 [ai]
-# Enable AI features (title generation, memory extraction, etc.)
-enabled = false
-# provider = "anthropic"
-
-[ai.features]
+# provider = "claude_code"
 title_generation = true
-skills_discovery = true
+marker_detection = true
 memory_extraction = true
+skills_discovery = true
 
-[ai.features.ranking]
-enabled = true
+# Background scheduler tasks
+# Auto-activated by their parent AI features — no individual enabled flags.
+# memory_extraction activates: ranking, duplicate_cleanup, embedding_refresh
+# skills_discovery activates: skill_cleanup
+
+[scheduler.ranking]
 interval_hours = 6
 batch_size = 500
 
-[ai.features.duplicate_cleanup]
-# Retroactive duplicate memory detection and removal
-enabled = false
+[scheduler.duplicate_cleanup]
 interval_hours = 24
 similarity_threshold = 0.75
 batch_size = 500
 
-[ai.features.embedding_refresh]
-# Backfill embeddings for memories missing them
-enabled = true
+[scheduler.embedding_refresh]
 interval_hours = 12
 batch_size = 100
 
-[ai.features.skill_cleanup]
-# Retroactive duplicate skill detection and removal
-enabled = false
+[scheduler.skill_cleanup]
 interval_hours = 24
 similarity_threshold = 0.80
 batch_size = 500
@@ -551,12 +686,15 @@ mod tests {
         assert_eq!(config.server.port, 19420);
         assert_eq!(config.server.host, "127.0.0.1");
         assert!(config.server.api_key.is_none());
-        assert!(!config.ai.enabled);
+        assert!(config.ai.provider.is_none());
+        assert_eq!(config.storage, Storage::Db);
     }
 
     #[test]
-    fn test_parse_config() {
+    fn test_parse_new_config_format() {
         let toml = r#"
+storage = "db"
+
 [server]
 port = 9000
 host = "0.0.0.0"
@@ -566,10 +704,7 @@ path = "~/.claude/projects"
 parser = "claude_code"
 
 [ai]
-enabled = true
-provider = "anthropic"
-
-[ai.features]
+provider = "claude_code"
 title_generation = true
 skills_discovery = false
 "#;
@@ -577,11 +712,92 @@ skills_discovery = false
         let config: Config = toml::from_str(toml).unwrap();
         assert_eq!(config.server.port, 9000);
         assert_eq!(config.server.host, "0.0.0.0");
+        assert_eq!(config.storage, Storage::Db);
         assert_eq!(config.watch.len(), 1);
         assert_eq!(config.watch[0].parser, "claude_code");
-        assert!(config.ai.enabled);
-        assert!(config.ai.features.title_generation);
-        assert!(!config.ai.features.skills_discovery);
+        assert_eq!(config.ai.provider.as_deref(), Some("claude_code"));
+        assert!(config.ai.title_generation);
+        assert!(!config.ai.skills_discovery);
+    }
+
+    #[test]
+    fn test_parse_legacy_config_format() {
+        let toml = r#"
+[server]
+port = 9000
+
+[ai]
+enabled = true
+provider = "claude_code"
+
+[ai.features]
+title_generation = true
+skills_discovery = false
+memory_extraction = true
+"#;
+
+        let mut config: Config = toml::from_str(toml).unwrap();
+        config.ai.apply_legacy();
+
+        assert_eq!(config.ai.provider.as_deref(), Some("claude_code"));
+        assert!(config.ai.title_generation);
+        assert!(!config.ai.skills_discovery);
+        assert!(config.ai.memory_extraction);
+    }
+
+    #[test]
+    fn test_legacy_enabled_false_clears_provider() {
+        let toml = r#"
+[ai]
+enabled = false
+provider = "claude_code"
+"#;
+
+        let mut config: Config = toml::from_str(toml).unwrap();
+        config.ai.apply_legacy();
+
+        assert!(config.ai.provider.is_none());
+    }
+
+    #[test]
+    fn test_is_feature_active() {
+        let mut config = Config::default();
+        config.ai.provider = Some("claude_code".to_string());
+
+        // All features active with db storage + provider
+        assert!(config.is_feature_active(AiFeature::TitleGeneration));
+        assert!(config.is_feature_active(AiFeature::MemoryExtraction));
+        assert!(config.is_feature_active(AiFeature::SkillsDiscovery));
+        assert!(config.is_feature_active(AiFeature::MarkerDetection));
+
+        // Ephemeral: only title_generation works
+        config.storage = Storage::Ephemeral;
+        assert!(config.is_feature_active(AiFeature::TitleGeneration));
+        assert!(!config.is_feature_active(AiFeature::MemoryExtraction));
+        assert!(!config.is_feature_active(AiFeature::SkillsDiscovery));
+        assert!(!config.is_feature_active(AiFeature::MarkerDetection));
+
+        // No provider: nothing active
+        config.ai.provider = None;
+        assert!(!config.is_feature_active(AiFeature::TitleGeneration));
+    }
+
+    #[test]
+    fn test_ephemeral_storage_mode() {
+        let toml = r#"
+storage = "ephemeral"
+
+[ephemeral]
+max_sessions = 50
+max_messages_per_session = 2000
+"#;
+
+        let config: Config = toml::from_str(toml).unwrap();
+        assert_eq!(config.storage, Storage::Ephemeral);
+        assert!(config.storage.is_ephemeral());
+        assert!(!config.storage.is_db());
+        assert_eq!(config.ephemeral.max_sessions, 50);
+        assert_eq!(config.ephemeral.max_messages_per_session, 2000);
     }
 
     #[test]
@@ -595,5 +811,20 @@ parser = "claude_code"
         let config: Config = toml::from_str(toml).unwrap();
         assert_eq!(config.watch.len(), 1);
         assert_eq!(config.watch[0].parser, "claude_code");
+    }
+
+    #[test]
+    fn test_scheduler_ignores_legacy_enabled_field() {
+        let toml = r#"
+[scheduler.ranking]
+enabled = true
+interval_hours = 12
+batch_size = 1000
+"#;
+
+        // Should parse without error even though `enabled` is no longer a field
+        let config: Config = toml::from_str(toml).unwrap();
+        assert_eq!(config.scheduler.ranking.interval_hours, 12);
+        assert_eq!(config.scheduler.ranking.batch_size, 1000);
     }
 }

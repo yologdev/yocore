@@ -24,12 +24,12 @@ Create one with `yocore --init`, or yocore will use built-in defaults.
 
 ## AI Features Not Working
 
-1. Check `ANTHROPIC_API_KEY` is set: `echo $ANTHROPIC_API_KEY`
+1. Verify Claude Code CLI is installed: `claude --version`
 2. Verify AI is enabled in config:
    ```toml
    [ai]
    enabled = true
-   provider = "anthropic"
+   provider = "claude_code"
    ```
 3. Check AI CLI status: `curl http://localhost:19420/api/ai/cli/status`
 

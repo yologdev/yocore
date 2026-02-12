@@ -4,14 +4,15 @@ Yocore includes AI-powered features that automatically enrich your coding sessio
 
 ## Prerequisites
 
-1. Set `ANTHROPIC_API_KEY` environment variable
+1. Have [Claude Code](https://claude.ai/code) CLI installed and authenticated (yocore spawns it as a subprocess)
 2. Enable AI in config:
 
 ```toml
 [ai]
-enabled = true
-provider = "anthropic"
+provider = "claude_code"
 ```
+
+AI is active when `provider` is set. No API key is needed in yocore's config — it spawns the Claude Code CLI which handles its own authentication.
 
 ## Features
 
@@ -20,7 +21,8 @@ provider = "anthropic"
 Automatically generates descriptive titles for coding sessions based on their content.
 
 - **Trigger**: Auto-triggered when a new session is parsed
-- **Config**: `ai.features.title_generation = true`
+- **Config**: `ai.title_generation = true`
+- **Storage**: Works in both `db` and `ephemeral` modes. In ephemeral mode, triggers at 49+ messages and reads first user messages directly from the JSONL file.
 - **SSE events**: `ai:title:start`, `ai:title:complete`, `ai:title:error`
 
 ### Memory Extraction
@@ -28,18 +30,20 @@ Automatically generates descriptive titles for coding sessions based on their co
 Extracts structured memories from sessions — decisions, facts, preferences, context, and tasks.
 
 - **Trigger**: Auto-triggered after session parsing
-- **Config**: `ai.features.memory_extraction = true`
+- **Config**: `ai.memory_extraction = true`
+- **Storage**: Requires `storage = "db"`
 - **SSE events**: `ai:memory:start`, `ai:memory:complete`, `ai:memory:error`
 - **Memory types**: `decision`, `fact`, `preference`, `context`, `task`
 
-See [Memory System](memory-system.md) for details on memory types and lifecycle.
+See [Yo Memory System](memory-system.md) for details on memory types and lifecycle.
 
 ### Skills Discovery
 
 Discovers reusable patterns and workflows from coding sessions.
 
 - **Trigger**: Auto-triggered after session parsing
-- **Config**: `ai.features.skills_discovery = true`
+- **Config**: `ai.skills_discovery = true`
+- **Storage**: Requires `storage = "db"`
 - **SSE events**: `ai:skill:start`, `ai:skill:complete`, `ai:skill:error`
 
 ### Marker Detection
@@ -47,6 +51,8 @@ Discovers reusable patterns and workflows from coding sessions.
 Identifies significant moments in sessions: breakthroughs, shipped features, decisions, bugs found, and stuck points.
 
 - **Trigger**: Auto-triggered after session parsing
+- **Config**: `ai.marker_detection = true`
+- **Storage**: Requires `storage = "db"`
 - **Marker types**: `breakthrough`, `ship`, `decision`, `bug`, `stuck`
 - **SSE events**: `ai:markers:start`, `ai:markers:complete`, `ai:markers:error`
 
@@ -56,10 +62,10 @@ When AI is enabled, yocore runs periodic background tasks:
 
 | Task | Default Interval | Config Section | Description |
 |------|-----------------|----------------|-------------|
-| Memory ranking | 6 hours | `[ai.features.ranking]` | Promotes accessed memories, demotes stale ones |
-| Embedding refresh | 12 hours | `[ai.features.embedding_refresh]` | Backfills missing vector embeddings |
-| Duplicate cleanup | 24 hours | `[ai.features.duplicate_cleanup]` | Removes similar memories (opt-in, `enabled = false` by default) |
-| Skill cleanup | 24 hours | `[ai.features.skill_cleanup]` | Removes similar skills (opt-in, `enabled = false` by default) |
+| Memory ranking | 6 hours | `[scheduler.ranking]` | Promotes accessed memories, demotes stale ones |
+| Embedding refresh | 12 hours | `[scheduler.embedding_refresh]` | Backfills missing vector embeddings |
+| Duplicate cleanup | 24 hours | `[scheduler.duplicate_cleanup]` | Removes similar memories |
+| Skill cleanup | 24 hours | `[scheduler.skill_cleanup]` | Removes similar skills |
 
 ## Concurrency
 

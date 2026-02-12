@@ -25,7 +25,10 @@ use std::io::{BufRead, Write};
 
 /// Run the MCP server over stdio
 pub async fn run_mcp_server(core: Core) -> Result<()> {
-    let mcp_db = McpDb::new(core.db.clone());
+    let db = core.db.clone().ok_or_else(|| {
+        crate::error::CoreError::Config("MCP server requires storage = \"db\"".into())
+    })?;
+    let mcp_db = McpDb::new(db);
 
     tracing::info!("Starting MCP server (stdio mode)");
 

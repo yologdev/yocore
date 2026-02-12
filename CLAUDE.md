@@ -25,7 +25,7 @@ cargo run -- --init            # Create default config and exit
 
 ## Architecture Overview
 
-**yocore** is a headless service that watches AI session files (Claude Code JSONL), parses them incrementally, stores structured data in SQLite, and exposes it via REST API and MCP server.
+**yocore** is a headless service that watches AI session files (Claude Code JSONL), parses them incrementally, stores structured data in SQLite or in-memory (`EphemeralIndex`), and exposes it via REST API and MCP server. Supports two storage modes: `db` (SQLite, full-featured) and `ephemeral` (in-memory, no persistence).
 
 ### Core (`lib.rs`) — Central Orchestrator
 
@@ -35,35 +35,38 @@ cargo run -- --init            # Create default config and exit
 
 ```
 File change → notify debouncer → tokio channel → spawned parse task
-  → incremental/full parse → SQLite + FTS5 triggers
+  → incremental/full parse → SQLite + FTS5 triggers OR EphemeralIndex (in-memory)
   → broadcast WatcherEvent via SSE
-  → auto-trigger AI tasks (title, memory, skills extraction)
-  → AI results stored with embeddings
+  → auto-trigger AI tasks (title in both modes; memory/skills/markers in DB mode only)
+  → AI results stored with embeddings (DB) or in-memory (ephemeral)
 ```
 
 ### Module Relationships
 
-- **`watcher/`** — File system watcher using `notify`. Detects changes, delegates to `storage.rs` for incremental parsing. Each file event spawns an independent tokio task to prevent starvation.
+- **`watcher/`** — File system watcher using `notify`. Detects changes, delegates to `store.rs` (`SessionStore` enum) for incremental parsing. Each file event spawns an independent tokio task to prevent starvation. `store.rs` dispatches to DB or `EphemeralIndex`.
 - **`parser/`** — Trait-based (`SessionParser`) JSONL parsing. Currently implements Claude Code parser. Returns `ParseResult` with events, metadata, and stats.
 - **`db/`** — Dual-connection SQLite (read + write) with WAL mode. Write connection used by watcher/AI; read connection used by API (never blocked). Schema in `schema.rs` includes FTS5 tables with auto-sync triggers. Migrations handled in `run_migrations()`.
-- **`api/`** — Axum REST server (~40 routes). Auth via optional Bearer token. SSE endpoint broadcasts `WatcherEvent` and `AiEvent`.
+- **`ephemeral/`** — In-memory storage (`EphemeralIndex`) as alternative to SQLite. Uses `RwLock<HashMap>` for projects, sessions, and messages. Message windowing keeps last N messages from full parse; incremental appends are uncapped. LRU eviction when `max_sessions` exceeded.
+- **`api/`** — Axum REST server (~50 routes). Auth via optional Bearer token. SSE endpoint broadcasts `WatcherEvent` and `AiEvent`. Each route handles both DB and ephemeral modes with per-handler branching.
 - **`mcp/`** — Stdio JSON-RPC server implementing Model Context Protocol. 7 tools for AI assistants to query memories, context, and skills.
-- **`ai/`** — AI feature modules (title generation, memory extraction, skill discovery, marker detection, ranking). Uses Claude Code CLI as subprocess. `AiTaskQueue` (semaphore) limits concurrency.
+- **`ai/`** — AI feature modules (title generation, memory extraction, skill discovery, marker detection, ranking). Uses Claude Code CLI as subprocess. `AiTaskQueue` (semaphore) limits concurrency. Title generation works in both storage modes; other features require DB.
 - **`embeddings/`** — Local all-MiniLM-L6-v2 model (384-dim) via candle. Lazy-loaded on first use (`OnceLock`). Powers hybrid search (FTS5 keyword + cosine similarity).
 - **`mdns.rs`** — mDNS/Bonjour service announcement for LAN auto-discovery. Registers `_yocore._tcp.local.` with TXT metadata (version, UUID, hostname). Auto-disabled for localhost bindings. Cleanup via `Drop`.
-- **`scheduler/`** — Background tasks: memory ranking, duplicate cleanup, embedding refresh, skill cleanup. Staggered intervals, feature-flag gated.
+- **`scheduler/`** — Background tasks: memory ranking, duplicate cleanup, embedding refresh, skill cleanup. Staggered intervals, feature-flag gated. DB mode only.
 - **`handlers/`** — Shared business logic used by both API routes and MCP handlers.
 
 ### Key Design Patterns
 
-- **Dual SQLite connections**: Separate read/write prevents API queries from blocking during file parses. WAL mode enables concurrent reads.
+- **Dual storage backends**: `SessionStore` enum dispatches to SQLite or `EphemeralIndex`. Config-driven at startup (`storage = "db"` vs `"ephemeral"`). API routes handle both with per-handler branching.
+- **Dual SQLite connections** (DB mode): Separate read/write prevents API queries from blocking during file parses. WAL mode enables concurrent reads.
+- **Message windowing** (ephemeral mode): Full parses keep only last N messages in memory (default 50); incremental appends are uncapped. Older messages readable from JSONL via byte offsets.
 - **Incremental parsing**: Tracks `file_size` + `max_sequence` per session. Only parses new bytes on file growth; full re-parse on truncation.
 - **Lifeboat pattern**: Saves session context (`active_task`, `recent_decisions`, `open_questions`) before context compaction for seamless resume. Stored in `session_context` table.
 - **Event broadcasting**: `tokio::sync::broadcast` channels for both watcher and AI events, consumed by SSE clients.
 
 ### Configuration
 
-TOML config at `~/.yolog/config.toml`. Key env vars: `YOLOG_DATA_DIR`, `YOLOG_SERVER_PORT`, `YOLOG_SERVER_HOST`, `YOLOG_SERVER_API_KEY`, `ANTHROPIC_API_KEY`. Config is also editable via REST API (`/api/config`).
+TOML config at `~/.yolog/config.toml`. Key env vars: `YOLOG_DATA_DIR`, `YOLOG_SERVER_PORT`, `YOLOG_SERVER_HOST`, `YOLOG_SERVER_API_KEY`. Config is also editable via REST API (`/api/config`).
 
 ### Database Schema
 

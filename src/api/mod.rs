@@ -10,8 +10,9 @@ mod sse;
 
 use crate::ai::queue::AiTaskQueue;
 use crate::ai::types::AiEvent;
-use crate::config::Config;
+use crate::config::{Config, Storage};
 use crate::db::Database;
+use crate::ephemeral::EphemeralIndex;
 use crate::error::Result;
 use crate::watcher::WatcherEvent;
 
@@ -29,7 +30,12 @@ use tower_http::trace::TraceLayer;
 /// Application state shared across all handlers
 #[derive(Clone)]
 pub struct AppState {
-    pub db: Arc<Database>,
+    /// Database connection (None in ephemeral mode)
+    pub db: Option<Arc<Database>>,
+    /// Ephemeral in-memory index (None in db mode)
+    pub ephemeral: Option<Arc<EphemeralIndex>>,
+    /// Active storage mode
+    pub storage: Storage,
     pub api_key: Option<String>,
     /// Broadcast channel for SSE events from watcher
     pub event_tx: broadcast::Sender<WatcherEvent>,
@@ -42,9 +48,11 @@ pub struct AppState {
 }
 
 /// Start the HTTP API server
+#[allow(clippy::too_many_arguments)]
 pub async fn serve(
     addr: SocketAddr,
-    db: Arc<Database>,
+    db: Option<Arc<Database>>,
+    ephemeral: Option<Arc<EphemeralIndex>>,
     config: &Config,
     config_path: std::path::PathBuf,
     event_tx: broadcast::Sender<WatcherEvent>,
@@ -53,6 +61,8 @@ pub async fn serve(
 ) -> Result<()> {
     let state = AppState {
         db: db.clone(),
+        ephemeral,
+        storage: config.storage.clone(),
         api_key: config.server.api_key.clone(),
         event_tx,
         ai_event_tx,
@@ -62,21 +72,24 @@ pub async fn serve(
 
     let app = create_router(state);
 
-    // Ensure persistent instance UUID exists (used by /health and mDNS)
-    if let Err(e) = db
-        .with_conn(crate::db::schema::get_or_create_instance_uuid)
-        .await
-    {
-        tracing::warn!("Failed to initialize instance UUID: {}", e);
-    }
+    // DB-specific initialization (instance UUID, instance name)
+    if let Some(db) = &db {
+        if let Err(e) = db
+            .with_conn(crate::db::schema::get_or_create_instance_uuid)
+            .await
+        {
+            tracing::warn!("Failed to initialize instance UUID: {}", e);
+        }
 
-    // Persist instance name from config to DB (for /health endpoint)
-    let instance_name = config.server.instance_name.clone();
-    if let Err(e) = db
-        .with_conn(move |conn| crate::db::schema::set_instance_name(conn, instance_name.as_deref()))
-        .await
-    {
-        tracing::warn!("Failed to set instance name: {}", e);
+        let instance_name = config.server.instance_name.clone();
+        if let Err(e) = db
+            .with_conn(move |conn| {
+                crate::db::schema::set_instance_name(conn, instance_name.as_deref())
+            })
+            .await
+        {
+            tracing::warn!("Failed to set instance name: {}", e);
+        }
     }
 
     // Check if port is already in use (another yocore instance running)
@@ -93,9 +106,9 @@ pub async fn serve(
         )));
     }
 
-    // Start mDNS service discovery if enabled
-    let _mdns_service = if config.server.should_enable_mdns() {
-        match start_mdns_service(&db, config, addr.port()).await {
+    // Start mDNS service discovery if enabled (requires DB for persistent UUID)
+    let _mdns_service = match (&db, config.server.should_enable_mdns()) {
+        (Some(db), true) => match start_mdns_service(db, config, addr.port()).await {
             Ok(service) => {
                 tracing::info!("mDNS service discovery enabled on local network");
                 Some(service)
@@ -104,14 +117,15 @@ pub async fn serve(
                 tracing::warn!("mDNS discovery unavailable: {} (continuing without it)", e);
                 None
             }
+        },
+        _ => {
+            if config.server.mdns_enabled {
+                tracing::info!(
+                    "mDNS disabled for localhost-only binding (set host = \"0.0.0.0\" to enable)"
+                );
+            }
+            None
         }
-    } else {
-        if config.server.mdns_enabled {
-            tracing::info!(
-                "mDNS disabled for localhost-only binding (set host = \"0.0.0.0\" to enable)"
-            );
-        }
-        None
     };
 
     tracing::info!("Listening on http://{}", addr);
@@ -135,7 +149,8 @@ fn create_router(state: AppState) -> Router {
         .allow_methods(Any)
         .allow_headers(Any);
 
-    // Protected API routes (require auth if api_key is configured)
+    // All API routes — each handler handles ephemeral mode internally
+    // (returning empty results or serving from EphemeralIndex as appropriate)
     let api_routes = Router::new()
         // Projects
         .route("/projects", get(routes::list_projects))
@@ -144,13 +159,13 @@ fn create_router(state: AppState) -> Router {
         .route("/projects/:id", get(routes::get_project))
         .route("/projects/:id", patch(routes::update_project))
         .route("/projects/:id", delete(routes::delete_project))
-        // Project Analytics
         .route(
             "/projects/:id/analytics",
             get(routes::get_project_analytics),
         )
         // Sessions
         .route("/sessions", get(routes::list_sessions))
+        .route("/sessions/limit", get(routes::get_session_limit_info))
         .route("/sessions/:id", get(routes::get_session))
         .route("/sessions/:id", patch(routes::update_session))
         .route("/sessions/:id", delete(routes::delete_session))
@@ -159,10 +174,6 @@ fn create_router(state: AppState) -> Router {
             "/sessions/:id/messages/:seq/content",
             get(routes::get_message_content),
         )
-        .route("/sessions/:id/markers", get(routes::get_session_markers))
-        .route("/sessions/:id/search", get(routes::search_session))
-        // Session Streaming
-        .route("/sessions/:id/bytes", get(routes::read_session_bytes))
         .route(
             "/sessions/:id/messages/append",
             post(routes::append_session_messages),
@@ -171,6 +182,9 @@ fn create_router(state: AppState) -> Router {
             "/sessions/:id/agent-summary",
             post(routes::update_agent_summary),
         )
+        .route("/sessions/:id/markers", get(routes::get_session_markers))
+        .route("/sessions/:id/search", get(routes::search_session))
+        .route("/sessions/:id/bytes", get(routes::read_session_bytes))
         // Search
         .route("/search", post(routes::search))
         // Memories
@@ -211,8 +225,6 @@ fn create_router(state: AppState) -> Router {
         .route("/ai/export/generate", post(routes::generate_ai_export))
         .route("/ai/export/chunk", post(routes::process_ai_export_chunk))
         .route("/ai/export/merge", post(routes::merge_ai_export_chunks))
-        // Session Limit
-        .route("/sessions/limit", get(routes::get_session_limit_info))
         // Memory Ranking
         .route(
             "/projects/:id/rank-memories",
@@ -228,18 +240,7 @@ fn create_router(state: AppState) -> Router {
         .route("/skills/:id", delete(routes::delete_skill_by_id))
         // Embeddings
         .route("/embeddings/backfill", post(routes::backfill_embeddings))
-        // Config API
-        .route("/config", get(config_routes::get_config))
-        .route("/config", put(config_routes::update_config))
-        .route("/config/ai", get(config_routes::get_ai_config))
-        .route("/config/ai", put(config_routes::update_ai_config))
-        .route("/config/watch", get(config_routes::list_watch_paths))
-        .route("/config/watch", post(config_routes::add_watch_path))
-        .route(
-            "/config/watch/:index",
-            delete(config_routes::remove_watch_path),
-        )
-        // Context API (for LLM skills and hooks)
+        // Context API
         .route("/context/project", get(context_routes::get_project_context))
         .route(
             "/context/session",
@@ -251,6 +252,17 @@ fn create_router(state: AppState) -> Router {
         )
         .route("/context/lifeboat", post(context_routes::save_lifeboat))
         .route("/context/search", post(context_routes::search_context))
+        // Config API
+        .route("/config", get(config_routes::get_config))
+        .route("/config", put(config_routes::update_config))
+        .route("/config/ai", get(config_routes::get_ai_config))
+        .route("/config/ai", put(config_routes::update_ai_config))
+        .route("/config/watch", get(config_routes::list_watch_paths))
+        .route("/config/watch", post(config_routes::add_watch_path))
+        .route(
+            "/config/watch/:index",
+            delete(config_routes::remove_watch_path),
+        )
         // Server-Sent Events
         .route("/events", get(sse::events_handler))
         // Apply auth middleware to all API routes

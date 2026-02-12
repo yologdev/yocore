@@ -1,9 +1,10 @@
 //! File watcher module for monitoring session file changes
 //!
 //! Watches configured directories for JSONL session files,
-//! parses them with the appropriate parser, and stores results in the database.
+//! parses them with the appropriate parser, and stores results via SessionStore.
 
-mod storage;
+pub(crate) mod storage;
+pub mod store;
 
 use crate::ai::auto_trigger::AiAutoTrigger;
 use crate::ai::types::AiEvent;
@@ -11,13 +12,14 @@ use crate::ai::AiTaskQueue;
 use crate::config::Config;
 use crate::db::Database;
 use crate::error::Result;
+use crate::parser::get_parser;
 use notify::RecursiveMode;
 use notify_debouncer_mini::{new_debouncer, DebouncedEventKind};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
-use storage::{incremental_parse, parse_session_file};
+use store::SessionStore;
 use tokio::sync::{broadcast, mpsc};
 
 /// Events emitted by the file watcher and other core services
@@ -97,19 +99,26 @@ struct WatchedDirectory {
 struct WatcherState {
     /// Watched directories by folder path
     watched: HashMap<String, WatchedDirectory>,
-    /// Database connection
-    db: Arc<Database>,
+    /// Storage backend (DB or ephemeral)
+    store: Arc<SessionStore>,
     /// Broadcast event sender (for SSE)
     event_tx: broadcast::Sender<WatcherEvent>,
-    /// AI auto-trigger — separate from state lock to avoid blocking event processing
-    ai_trigger: Arc<tokio::sync::Mutex<AiAutoTrigger>>,
+    /// AI auto-trigger (None in ephemeral mode — no DB for AI tasks)
+    ai_trigger: Option<Arc<tokio::sync::Mutex<AiAutoTrigger>>>,
+    /// Config path (for ephemeral title generation)
+    config_path: PathBuf,
+    /// AI event sender (for ephemeral title generation SSE)
+    ai_event_tx: broadcast::Sender<AiEvent>,
+    /// AI task queue (for ephemeral title concurrency)
+    ai_task_queue: AiTaskQueue,
 }
 
 /// Start watching configured paths for session files
 pub async fn start_watcher(
     config: &Config,
     config_path: PathBuf,
-    db: Arc<Database>,
+    store: Arc<SessionStore>,
+    db: Option<Arc<Database>>,
     event_tx: broadcast::Sender<WatcherEvent>,
     ai_event_tx: broadcast::Sender<AiEvent>,
     ai_task_queue: AiTaskQueue,
@@ -142,18 +151,28 @@ pub async fn start_watcher(
         );
     }
 
-    let ai_trigger = Arc::new(tokio::sync::Mutex::new(AiAutoTrigger::new(
-        config_path,
-        db.clone(),
-        ai_event_tx,
-        ai_task_queue,
-    )));
+    // Clone before potential move into AiAutoTrigger
+    let config_path_for_state = config_path.clone();
+    let ai_event_tx_for_state = ai_event_tx.clone();
+    let ai_task_queue_for_state = ai_task_queue.clone();
+
+    let ai_trigger = db.map(|db| {
+        Arc::new(tokio::sync::Mutex::new(AiAutoTrigger::new(
+            config_path,
+            db,
+            ai_event_tx,
+            ai_task_queue,
+        )))
+    });
 
     let state = Arc::new(tokio::sync::RwLock::new(WatcherState {
         watched,
-        db,
+        store,
         event_tx,
-        ai_trigger: Arc::clone(&ai_trigger),
+        ai_trigger: ai_trigger.clone(),
+        config_path: config_path_for_state,
+        ai_event_tx: ai_event_tx_for_state,
+        ai_task_queue: ai_task_queue_for_state,
     }));
 
     // Create a channel to send events from notify thread to tokio runtime
@@ -291,36 +310,21 @@ async fn handle_file_event(state: &Arc<tokio::sync::RwLock<WatcherState>>, path:
     };
 
     let parser_type = watched_dir.parser_type.clone();
-    let db = Arc::clone(&state_guard.db);
+    let store = Arc::clone(&state_guard.store);
     let event_tx = state_guard.event_tx.clone();
     let ai_trigger = state_guard.ai_trigger.clone();
+    let config_path = state_guard.config_path.clone();
+    let ai_event_tx = state_guard.ai_event_tx.clone();
+    let ai_task_queue = state_guard.ai_task_queue.clone();
 
-    // Drop read lock before DB queries and parsing
+    // Drop read lock before store queries and parsing
     drop(state_guard);
 
-    // Query DB for this session's last known file_size, message_count, and max sequence
-    let session_id_for_query = file_stem.clone();
-    let (db_file_size, db_message_count, db_max_sequence) = db
-        .with_conn(move |conn| {
-            let session_info = conn
-                .query_row(
-                    "SELECT COALESCE(file_size, 0), COALESCE(message_count, 0) FROM sessions WHERE id = ?",
-                    [&session_id_for_query],
-                    |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
-                )
-                .unwrap_or((0, 0));
-
-            let max_seq: i64 = conn
-                .query_row(
-                    "SELECT COALESCE(MAX(sequence_num), -1) FROM session_messages WHERE session_id = ?",
-                    [&session_id_for_query],
-                    |row| row.get(0),
-                )
-                .unwrap_or(-1);
-
-            (session_info.0, session_info.1, max_seq)
-        })
-        .await;
+    // Query store for this session's last known state
+    let session_state = store.get_session_state(&file_stem).await;
+    let db_file_size = session_state.file_size;
+    let db_message_count = session_state.message_count;
+    let db_max_sequence = session_state.max_sequence;
 
     if new_size == db_file_size as u64 {
         return; // No change
@@ -336,15 +340,15 @@ async fn handle_file_event(state: &Arc<tokio::sync::RwLock<WatcherState>>, path:
         });
     }
 
-    // Choose parse strategy
+    // Choose parse strategy and execute
     let message_count = if new_size < db_file_size as u64 {
         // File was truncated — full re-parse
         tracing::info!("File truncated for {}, full re-parse", file_stem);
-        parse_session_file(&db, &event_tx, &path_str, &file_stem, &parser_type).await
+        full_parse(&store, &event_tx, &path_str, &file_stem, &parser_type).await
     } else if db_file_size > 0 && db_message_count > 0 {
         // Existing session with data — incremental parse (delta only)
         incremental_parse(
-            &db,
+            &store,
             &event_tx,
             &path_str,
             &file_stem,
@@ -356,14 +360,276 @@ async fn handle_file_event(state: &Arc<tokio::sync::RwLock<WatcherState>>, path:
         .await
     } else {
         // New session or empty — full parse
-        parse_session_file(&db, &event_tx, &path_str, &file_stem, &parser_type).await
+        full_parse(&store, &event_tx, &path_str, &file_stem, &parser_type).await
     };
 
-    if let Some(count) = message_count {
-        ai_trigger
+    if let (Some(count), Some(trigger)) = (message_count, &ai_trigger) {
+        trigger
             .lock()
             .await
             .on_session_parsed(&file_stem, count)
             .await;
+    }
+
+    // Ephemeral-mode title generation (no DB needed)
+    if let (Some(count), None) = (message_count, &ai_trigger) {
+        if count >= 49 {
+            if let SessionStore::Ephemeral(idx) = store.as_ref() {
+                maybe_trigger_ephemeral_title(
+                    idx,
+                    &file_stem,
+                    &config_path,
+                    &ai_event_tx,
+                    &ai_task_queue,
+                )
+                .await;
+            }
+        }
+    }
+}
+
+/// Trigger title generation for an ephemeral session if conditions are met.
+async fn maybe_trigger_ephemeral_title(
+    idx: &Arc<crate::ephemeral::EphemeralIndex>,
+    session_id: &str,
+    config_path: &Path,
+    ai_event_tx: &broadcast::Sender<AiEvent>,
+    ai_task_queue: &AiTaskQueue,
+) {
+    if idx.has_title(session_id) {
+        return;
+    }
+
+    let config = match Config::from_file(config_path) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::debug!("Ephemeral title: config read failed: {}", e);
+            return;
+        }
+    };
+    if !config.is_ai_active()
+        || !config.is_feature_active(crate::config::AiFeature::TitleGeneration)
+    {
+        tracing::debug!("Ephemeral title: AI not active or title feature disabled");
+        return;
+    }
+
+    let first_messages = match idx.get_first_user_messages(session_id, 10, 4000) {
+        Some(m) => m,
+        None => {
+            tracing::debug!(
+                "Ephemeral title: no user messages found for {}",
+                &session_id[..8]
+            );
+            return;
+        }
+    };
+    tracing::info!(
+        "Ephemeral title: triggering for {} ({} chars)",
+        &session_id[..8],
+        first_messages.len()
+    );
+
+    let permit = match ai_task_queue.acquire().await {
+        Ok(p) => p,
+        Err(_) => return,
+    };
+
+    // Mark as generated before spawning to prevent duplicate triggers
+    idx.set_title_generated(session_id);
+
+    let idx = idx.clone();
+    let sid = session_id.to_string();
+    let tx = ai_event_tx.clone();
+
+    tokio::spawn(async move {
+        let _permit = permit;
+        let _ = tx.send(AiEvent::TitleStart {
+            session_id: sid.clone(),
+        });
+
+        let result = crate::ai::title::generate_title_from_text(&sid, &first_messages, None).await;
+
+        if let Some(ref title) = result.title {
+            idx.update_session(&sid, Some(title.clone()), None);
+            idx.set_title_generated(&sid);
+            tracing::info!("Ephemeral title generated for {}", &sid[..8]);
+            let _ = tx.send(AiEvent::TitleComplete {
+                session_id: sid,
+                title: title.clone(),
+            });
+        } else if let Some(error) = result.error {
+            tracing::warn!("Ephemeral title failed for {}: {}", &sid[..8], error);
+            let _ = tx.send(AiEvent::TitleError {
+                session_id: sid,
+                error,
+            });
+        }
+    });
+}
+
+/// Read and parse a full session file, then store via SessionStore.
+/// Returns Some(message_count) on success, None on failure.
+async fn full_parse(
+    store: &SessionStore,
+    event_tx: &broadcast::Sender<WatcherEvent>,
+    file_path: &str,
+    session_id: &str,
+    parser_type: &str,
+) -> Option<usize> {
+    let file_path_owned = file_path.to_string();
+
+    // Read file content
+    let path_for_read = PathBuf::from(file_path);
+    let content =
+        match tokio::task::spawn_blocking(move || std::fs::read_to_string(&path_for_read)).await {
+            Ok(Ok(c)) => c,
+            Ok(Err(e)) => {
+                let _ = event_tx.send(WatcherEvent::Error {
+                    file_path: file_path_owned,
+                    error: format!("Failed to read file: {}", e),
+                });
+                return None;
+            }
+            Err(_) => {
+                let _ = event_tx.send(WatcherEvent::Error {
+                    file_path: file_path_owned,
+                    error: "spawn_blocking task panicked".to_string(),
+                });
+                return None;
+            }
+        };
+
+    // Parse
+    let parser = match get_parser(parser_type) {
+        Some(p) => p,
+        None => {
+            tracing::warn!("Unknown parser type: {}", parser_type);
+            return None;
+        }
+    };
+
+    let lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
+    let result = parser.parse(&lines);
+    let message_count = result.events.len();
+
+    tracing::info!("Parsed session {}: {} messages", session_id, message_count);
+
+    // Store via SessionStore
+    match store
+        .store_full_parse(file_path, session_id, parser_type, &result)
+        .await
+    {
+        Ok(true) => {
+            let _ = event_tx.send(WatcherEvent::SessionParsed {
+                session_id: session_id.to_string(),
+                message_count,
+            });
+            Some(message_count)
+        }
+        Ok(false) => {
+            tracing::debug!("Skipped session {} - no matching project", session_id);
+            None
+        }
+        Err(e) => {
+            tracing::error!("Failed to store session {}: {}", session_id, e);
+            let _ = event_tx.send(WatcherEvent::Error {
+                file_path: file_path.to_string(),
+                error: format!("Failed to store session: {}", e),
+            });
+            None
+        }
+    }
+}
+
+/// Read and parse only new bytes appended to a session file, then store via SessionStore.
+/// Returns Some(total_message_count) on success, None on failure.
+#[allow(clippy::too_many_arguments)]
+async fn incremental_parse(
+    store: &SessionStore,
+    event_tx: &broadcast::Sender<WatcherEvent>,
+    file_path: &str,
+    session_id: &str,
+    parser_type: &str,
+    last_offset: i64,
+    last_message_count: i64,
+    last_max_sequence: i64,
+) -> Option<usize> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let file_path_owned = file_path.to_string();
+    let offset = last_offset as u64;
+
+    // Read only new bytes from the file
+    let path_for_read = PathBuf::from(file_path);
+    let new_content = match tokio::task::spawn_blocking(move || {
+        let mut file = std::fs::File::open(&path_for_read)?;
+        file.seek(SeekFrom::Start(offset))?;
+        let mut buf = String::new();
+        file.read_to_string(&mut buf)?;
+        Ok::<String, std::io::Error>(buf)
+    })
+    .await
+    {
+        Ok(Ok(c)) if !c.is_empty() => c,
+        Ok(Ok(_)) => return None,
+        Ok(Err(e)) => {
+            let _ = event_tx.send(WatcherEvent::Error {
+                file_path: file_path_owned,
+                error: format!("Failed to read file delta: {}", e),
+            });
+            return None;
+        }
+        Err(_) => return None,
+    };
+
+    // Parse new lines
+    let parser = match get_parser(parser_type) {
+        Some(p) => p,
+        None => return None,
+    };
+
+    let lines: Vec<String> = new_content.lines().map(|l| l.to_string()).collect();
+    let result = parser.parse(&lines);
+
+    if result.events.is_empty() {
+        return None;
+    }
+
+    tracing::info!(
+        "Incremental: parsed {} new messages for {} (total: {})",
+        result.events.len(),
+        session_id,
+        last_message_count as usize + result.events.len()
+    );
+
+    // Store via SessionStore
+    match store
+        .store_incremental_parse(
+            file_path,
+            session_id,
+            &result.events,
+            &result.stats,
+            last_offset,
+            last_message_count,
+            last_max_sequence,
+        )
+        .await
+    {
+        Ok(total) => {
+            let _ = event_tx.send(WatcherEvent::SessionParsed {
+                session_id: session_id.to_string(),
+                message_count: total,
+            });
+            Some(total)
+        }
+        Err(e) => {
+            tracing::error!(
+                "Failed to store incremental parse for {}: {}",
+                session_id,
+                e
+            );
+            None
+        }
     }
 }

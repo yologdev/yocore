@@ -15,6 +15,7 @@ Yocore is the core engine behind [Yolog](https://github.com/yologdev/yolog) - a 
 - **Multi-Parser Support**: Parses Claude Code, OpenClaw, and other AI assistant formats
 - **Full-Text Search**: SQLite FTS5-powered search across all sessions and memories
 - **Memory System**: Extract and organize decisions, facts, preferences, and tasks
+- **Ephemeral Mode**: Lightweight in-memory storage with no database overhead
 - **HTTP API**: RESTful API for session replay, search, and memory management
 - **MCP Server**: Model Context Protocol integration for AI assistants
 - **LAN Discovery**: Automatic instance discovery via mDNS/Bonjour on the local network
@@ -66,6 +67,9 @@ yocore --mcp
 Create a config file at `~/.yolog/config.toml`:
 
 ```toml
+# Storage: "db" (default, persistent) or "ephemeral" (in-memory, volatile)
+storage = "db"
+
 [server]
 port = 19420
 host = "127.0.0.1"
@@ -73,27 +77,21 @@ host = "127.0.0.1"
 # mdns_enabled = true            # mDNS discovery (default: true)
 # instance_name = "My Workstation"  # Custom display name for LAN discovery
 
-[database]
-path = "~/.local/share/yocore/yocore.db"
-
 # Watch multiple paths with different parsers
 [[watch]]
 path = "~/.claude/projects"
 parser = "claude_code"
 
-[[watch]]
-path = "~/.openclaw/workspace"
-parser = "openclaw"
+# [[watch]]
+# path = "~/.openclaw/workspace"
+# parser = "openclaw"
 
 [ai]
-enabled = false
-# provider = "anthropic"
-# ANTHROPIC_API_KEY from env
-
-[ai.features]
-title_generation = false
-skills_discovery = false
-memory_extraction = false
+provider = "claude_code"      # Requires Claude Code CLI installed
+title_generation = true
+memory_extraction = true
+skills_discovery = true
+marker_detection = true
 ```
 
 ### MCP Tools
