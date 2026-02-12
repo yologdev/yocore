@@ -9,11 +9,10 @@ Yocore includes AI-powered features that automatically enrich your coding sessio
 
 ```toml
 [ai]
-enabled = true
 provider = "claude_code"
 ```
 
-No API key is needed in yocore's config — it spawns the Claude Code CLI which handles its own authentication.
+AI is active when `provider` is set. No API key is needed in yocore's config — it spawns the Claude Code CLI which handles its own authentication.
 
 ## Features
 
@@ -23,6 +22,7 @@ Automatically generates descriptive titles for coding sessions based on their co
 
 - **Trigger**: Auto-triggered when a new session is parsed
 - **Config**: `ai.title_generation = true`
+- **Storage**: Works in both `db` and `ephemeral` modes. In ephemeral mode, triggers at 49+ messages and reads first user messages directly from the JSONL file.
 - **SSE events**: `ai:title:start`, `ai:title:complete`, `ai:title:error`
 
 ### Memory Extraction
@@ -31,6 +31,7 @@ Extracts structured memories from sessions — decisions, facts, preferences, co
 
 - **Trigger**: Auto-triggered after session parsing
 - **Config**: `ai.memory_extraction = true`
+- **Storage**: Requires `storage = "db"`
 - **SSE events**: `ai:memory:start`, `ai:memory:complete`, `ai:memory:error`
 - **Memory types**: `decision`, `fact`, `preference`, `context`, `task`
 
@@ -42,6 +43,7 @@ Discovers reusable patterns and workflows from coding sessions.
 
 - **Trigger**: Auto-triggered after session parsing
 - **Config**: `ai.skills_discovery = true`
+- **Storage**: Requires `storage = "db"`
 - **SSE events**: `ai:skill:start`, `ai:skill:complete`, `ai:skill:error`
 
 ### Marker Detection
@@ -50,6 +52,7 @@ Identifies significant moments in sessions: breakthroughs, shipped features, dec
 
 - **Trigger**: Auto-triggered after session parsing
 - **Config**: `ai.marker_detection = true`
+- **Storage**: Requires `storage = "db"`
 - **Marker types**: `breakthrough`, `ship`, `decision`, `bug`, `stuck`
 - **SSE events**: `ai:markers:start`, `ai:markers:complete`, `ai:markers:error`
 
@@ -61,8 +64,8 @@ When AI is enabled, yocore runs periodic background tasks:
 |------|-----------------|----------------|-------------|
 | Memory ranking | 6 hours | `[scheduler.ranking]` | Promotes accessed memories, demotes stale ones |
 | Embedding refresh | 12 hours | `[scheduler.embedding_refresh]` | Backfills missing vector embeddings |
-| Duplicate cleanup | 24 hours | `[scheduler.duplicate_cleanup]` | Removes similar memories (opt-in, `enabled = false` by default) |
-| Skill cleanup | 24 hours | `[scheduler.skill_cleanup]` | Removes similar skills (opt-in, `enabled = false` by default) |
+| Duplicate cleanup | 24 hours | `[scheduler.duplicate_cleanup]` | Removes similar memories |
+| Skill cleanup | 24 hours | `[scheduler.skill_cleanup]` | Removes similar skills |
 
 ## Concurrency
 

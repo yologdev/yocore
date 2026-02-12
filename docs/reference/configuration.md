@@ -40,7 +40,7 @@ Settings for ephemeral (in-memory) storage mode. Only used when `storage = "ephe
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `max_sessions` | integer | `100` | Maximum sessions to keep in memory. Oldest (LRU) sessions are evicted when exceeded |
-| `max_messages_per_session` | integer | `5000` | Maximum messages stored per session |
+| `max_messages_per_session` | integer | `50` | Messages kept in memory per session (tail from full parse; incremental appends are uncapped) |
 
 ## `[ai]`
 
@@ -116,7 +116,7 @@ Available in ephemeral mode:
 - Config API
 - Title generation (if AI provider configured)
 
-Not available (returns `501 Not Implemented`):
+Not available (returns empty results gracefully):
 - Full-text search
 - Memories, skills, markers
 - Memory ranking, duplicate cleanup, embedding refresh
@@ -148,7 +148,7 @@ enabled = true
 # Ephemeral storage limits (only used when storage = "ephemeral")
 # [ephemeral]
 # max_sessions = 100
-# max_messages_per_session = 5000
+# max_messages_per_session = 50
 
 [ai]
 # provider = "claude_code"
