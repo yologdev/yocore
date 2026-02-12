@@ -8,6 +8,7 @@
 - [First Run](getting-started/first-run.md)
   - [Minimal Setup](getting-started/minimal-setup.md)
   - [Long-Term Memory](getting-started/long-term-memory.md)
+  - [Ephemeral Mode](getting-started/ephemeral-mode.md)
 
 # Reference
 
