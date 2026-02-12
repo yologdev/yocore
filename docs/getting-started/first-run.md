@@ -17,7 +17,7 @@ yocore
 Yocore starts on `http://127.0.0.1:19420` by default. On first start it:
 
 1. Creates the data directory (`~/.yolog/`)
-2. Initializes the SQLite database
+2. Initializes the SQLite database (only in `storage = "db"` mode)
 3. Starts watching configured directories for session files
 4. Starts the HTTP API server
 
@@ -29,11 +29,22 @@ That's it — yocore watches your AI session files in the background. Any new or
 curl http://127.0.0.1:19420/health
 ```
 
+In DB mode:
 ```json
 {
   "status": "ok",
   "version": "0.2.0",
-  "instance_uuid": "84c11d21-d95a-48f1-ac17-b4c5d9e97c44"
+  "storage": "db",
+  "instance_uuid": "84c11d21-..."
+}
+```
+
+In ephemeral mode:
+```json
+{
+  "status": "ok",
+  "version": "0.2.0",
+  "storage": "ephemeral"
 }
 ```
 
@@ -57,5 +68,5 @@ See [CLI Reference](../reference/cli.md) for all options.
 ## What's Next?
 
 - **Session replay** — Install the [Yolog](https://github.com/yologdev/support) app
-- **Long-term memory** — Add AI-powered memory extraction with [yoskill](long-term-memory.md) (optional)
+- **Yo Memory** — Add AI-powered memory extraction with [yoskill](yo-memory.md) (optional)
 - **LAN access** — Share sessions across machines with [mDNS discovery](../guides/lan-discovery.md)

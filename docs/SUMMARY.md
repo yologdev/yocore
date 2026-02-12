@@ -7,7 +7,7 @@
 - [Installation](getting-started/installation.md)
 - [First Run](getting-started/first-run.md)
   - [Minimal Setup](getting-started/minimal-setup.md)
-  - [Long-Term Memory](getting-started/long-term-memory.md)
+  - [Yo Memory](getting-started/yo-memory.md)
   - [Ephemeral Mode](getting-started/ephemeral-mode.md)
 
 # Reference
@@ -22,7 +22,7 @@
 
 - [LAN Discovery (mDNS)](guides/lan-discovery.md)
 - [AI Features](guides/ai-features.md)
-- [Memory System](guides/memory-system.md)
+- [Yo Memory System](guides/memory-system.md)
 
 # Internals
 

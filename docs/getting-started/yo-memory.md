@@ -1,6 +1,6 @@
-# Long-Term Memory
+# Yo Memory
 
-Yocore includes an optional AI-powered memory system that extracts and organizes knowledge from your coding sessions. This gives your AI assistant persistent context across sessions — decisions made, patterns discovered, preferences established, and tasks tracked.
+Yocore includes an optional AI-powered memory system called **Yo Memory** that extracts and organizes knowledge from your coding sessions. This gives your AI assistant persistent context across sessions — decisions made, patterns discovered, preferences established, and tasks tracked.
 
 ## What It Adds
 
@@ -20,7 +20,7 @@ Enable memory when you want your AI assistant to learn from past sessions.
 
 ## Setup with yoskill (Recommended)
 
-[yoskill](https://github.com/yologdev/yoskill) is a skill pack that gives your AI assistant convenient slash commands for the memory system. It works with Claude Code, OpenClaw, Cursor, Windsurf, Copilot, and Cline.
+[yoskill](https://github.com/yologdev/yoskill) is a skill pack that gives your AI assistant convenient slash commands for the memory system. It works with Claude Code, OpenClaw, and other agentic coding tools that support skills.
 
 ### Install yoskill
 
@@ -153,6 +153,6 @@ See [MCP Tools Reference](../reference/mcp-tools.md) for parameters and examples
 
 ## Learn More
 
-- [Memory System Deep Dive](../guides/memory-system.md) — How extraction, ranking, search, and dedup work internally
+- [Yo Memory System](../guides/memory-system.md) — How extraction, ranking, search, and dedup work internally
 - [AI Features](../guides/ai-features.md) — All AI-powered features and configuration
 - [Configuration Reference](../reference/configuration.md) — Full `[ai]` config options

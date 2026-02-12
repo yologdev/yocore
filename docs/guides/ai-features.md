@@ -35,7 +35,7 @@ Extracts structured memories from sessions — decisions, facts, preferences, co
 - **SSE events**: `ai:memory:start`, `ai:memory:complete`, `ai:memory:error`
 - **Memory types**: `decision`, `fact`, `preference`, `context`, `task`
 
-See [Memory System](memory-system.md) for details on memory types and lifecycle.
+See [Yo Memory System](memory-system.md) for details on memory types and lifecycle.
 
 ### Skills Discovery
 

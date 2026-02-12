@@ -621,7 +621,7 @@ enabled = true
 # Ephemeral storage limits (only used when storage = "ephemeral")
 # [ephemeral]
 # max_sessions = 100
-# max_messages_per_session = 5000
+# max_messages_per_session = 50
 
 # AI features — each toggle is independent, some require storage = "db"
 # AI is active when provider is set and at least one feature is enabled.

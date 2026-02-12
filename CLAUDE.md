@@ -66,7 +66,7 @@ File change → notify debouncer → tokio channel → spawned parse task
 
 ### Configuration
 
-TOML config at `~/.yolog/config.toml`. Key env vars: `YOLOG_DATA_DIR`, `YOLOG_SERVER_PORT`, `YOLOG_SERVER_HOST`, `YOLOG_SERVER_API_KEY`, `ANTHROPIC_API_KEY`. Config is also editable via REST API (`/api/config`).
+TOML config at `~/.yolog/config.toml`. Key env vars: `YOLOG_DATA_DIR`, `YOLOG_SERVER_PORT`, `YOLOG_SERVER_HOST`, `YOLOG_SERVER_API_KEY`. Config is also editable via REST API (`/api/config`).
 
 ### Database Schema
 

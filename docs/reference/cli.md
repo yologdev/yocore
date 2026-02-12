@@ -30,7 +30,6 @@ Environment variables override config file values. CLI flags take highest priori
 | `YOLOG_SERVER_API_KEY` | Set API key for authentication | `my-secret-key` |
 | `YOLOG_DATA_DIR` | Override data directory | `/data/yocore` |
 | `YOLOG_CONFIG_READONLY` | Prevent config changes via API | `true` |
-| `ANTHROPIC_API_KEY` | Used by Claude Code CLI (not yocore directly) | `sk-ant-...` |
 
 ## Precedence
 

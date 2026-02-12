@@ -2,7 +2,7 @@
 
 Yocore implements the [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) for AI assistant integration. Start in MCP mode with `yocore --mcp`.
 
-> **Tip:** For most users, [yoskill](https://github.com/yologdev/yoskill) provides a more convenient interface with slash commands and automatic hooks. MCP is useful for programmatic access or clients that don't support skills. See [Long-Term Memory](../getting-started/long-term-memory.md) for setup.
+> **Tip:** For most users, [yoskill](https://github.com/yologdev/yoskill) provides a more convenient interface with slash commands and automatic hooks. MCP is useful for programmatic access or clients that don't support skills. See [Yo Memory](../getting-started/yo-memory.md) for setup.
 
 Protocol version: `2024-11-05`
 

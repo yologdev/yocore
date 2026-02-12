@@ -1,4 +1,4 @@
-# Memory System Deep Dive
+# Yo Memory System
 
 Yocore's memory system extracts, organizes, ranks, and serves knowledge from AI coding sessions. This page explains how each piece works internally.
 
@@ -311,4 +311,4 @@ For day-to-day use, [yoskill](https://github.com/yologdev/yoskill) commands are 
 | `/yo tags` | Browse available memory tags |
 | `/yo status` | Verify yocore is running and connected |
 
-The SessionStart and PreCompact hooks handle context flow automatically — you don't need to manually save or restore state. See [Long-Term Memory setup](../getting-started/long-term-memory.md) for installation.
+The SessionStart and PreCompact hooks handle context flow automatically — you don't need to manually save or restore state. See [Yo Memory setup](../getting-started/yo-memory.md) for installation.
