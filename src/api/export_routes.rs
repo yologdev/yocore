@@ -17,7 +17,7 @@ pub async fn generate_ai_export(
     State(state): State<AppState>,
     Json(req): Json<export::GenerateExportRequest>,
 ) -> impl IntoResponse {
-    let format = match ExportFormat::from_str(&req.format) {
+    let format = match ExportFormat::parse_format(&req.format) {
         Some(f) => f,
         None => {
             return (

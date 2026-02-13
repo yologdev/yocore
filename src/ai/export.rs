@@ -24,7 +24,7 @@ pub enum ExportFormat {
 
 impl ExportFormat {
     /// Parse from string (matches kebab-case serde format)
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse_format(s: &str) -> Option<Self> {
         match s {
             "raw" => Some(Self::Raw),
             "technical-summary" => Some(Self::TechnicalSummary),
@@ -33,11 +33,11 @@ impl ExportFormat {
         }
     }
 
-    /// Timeout for AI generation
+    /// Timeout for AI generation (3 min — export prompts produce long structured output)
     pub fn timeout(&self) -> Duration {
         match self {
             Self::Raw => Duration::from_secs(0),
-            _ => Duration::from_secs(120),
+            _ => Duration::from_secs(180),
         }
     }
 }
@@ -256,13 +256,20 @@ Extracted highlights:\n{}",
     }
 }
 
-/// Truncate content to fit within CLI limits
+/// Truncate content to fit within CLI limits (UTF-8 safe)
 fn truncate_content(content: &str, max_length: usize) -> String {
     if content.len() <= max_length {
         return content.to_string();
     }
 
-    let truncated = &content[..max_length];
+    // Find a valid UTF-8 boundary at or before max_length
+    let safe_end = content
+        .char_indices()
+        .take_while(|(i, _)| *i <= max_length)
+        .last()
+        .map(|(i, _)| i)
+        .unwrap_or(0);
+    let truncated = &content[..safe_end];
 
     // Try to truncate at a message boundary (### User / ### Assistant)
     if let Some(pos) = truncated.rfind("\n### ") {
@@ -280,7 +287,7 @@ fn truncate_content(content: &str, max_length: usize) -> String {
         );
     }
 
-    format!("{}...", &content[..max_length - 3])
+    format!("{}...", truncated)
 }
 
 // ============================================================================
@@ -332,7 +339,7 @@ pub async fn process_chunk(
     request: &ChunkRequest,
     cli: &DetectedCli,
 ) -> Result<ChunkResult, String> {
-    let format = ExportFormat::from_str(&request.format)
+    let format = ExportFormat::parse_format(&request.format)
         .ok_or_else(|| format!("Unknown format: {}", request.format))?;
 
     if format == ExportFormat::Raw {
@@ -354,7 +361,7 @@ pub async fn process_chunk(
         request.target_output_chars,
     );
 
-    let timeout = Duration::from_secs(120);
+    let timeout = Duration::from_secs(180);
     let start = Instant::now();
     let result = run_cli(cli, &prompt, timeout).await.map_err(|e| {
         format!(
@@ -387,7 +394,7 @@ pub async fn merge_chunks(
     request: &MergeRequest,
     cli: &DetectedCli,
 ) -> Result<ExportResult, String> {
-    let format = ExportFormat::from_str(&request.format)
+    let format = ExportFormat::parse_format(&request.format)
         .ok_or_else(|| format!("Unknown format: {}", request.format))?;
 
     if format == ExportFormat::Raw {
@@ -400,7 +407,7 @@ pub async fn merge_chunks(
     }
 
     let prompt = get_merge_prompt(format, &request.partial_results);
-    let timeout = Duration::from_secs(120);
+    let timeout = Duration::from_secs(180);
 
     let start = Instant::now();
     let result = run_cli(cli, &prompt, timeout).await?;
