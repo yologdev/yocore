@@ -5,6 +5,7 @@
 mod auth;
 mod config_routes;
 mod context_routes;
+mod export_routes;
 pub mod routes;
 mod sse;
 
@@ -220,11 +221,20 @@ fn create_router(state: AppState) -> Router {
         // AI Export
         .route(
             "/ai/export/capabilities",
-            get(routes::get_ai_export_capabilities),
+            get(export_routes::get_ai_export_capabilities),
         )
-        .route("/ai/export/generate", post(routes::generate_ai_export))
-        .route("/ai/export/chunk", post(routes::process_ai_export_chunk))
-        .route("/ai/export/merge", post(routes::merge_ai_export_chunks))
+        .route(
+            "/ai/export/generate",
+            post(export_routes::generate_ai_export),
+        )
+        .route(
+            "/ai/export/chunk",
+            post(export_routes::process_ai_export_chunk),
+        )
+        .route(
+            "/ai/export/merge",
+            post(export_routes::merge_ai_export_chunks),
+        )
         // Memory Ranking
         .route(
             "/projects/:id/rank-memories",
