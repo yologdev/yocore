@@ -45,6 +45,7 @@ impl ExportFormat {
 /// Request to generate AI export
 #[derive(Debug, Clone, Deserialize)]
 pub struct GenerateExportRequest {
+    pub session_id: String,
     pub format: String,
     pub raw_content: String,
 }

@@ -64,6 +64,22 @@ pub enum SseEvent {
     AiMarkerComplete { session_id: String, count: usize },
     /// Marker detection failed
     AiMarkerError { session_id: String, error: String },
+    /// Export generation started
+    AiExportStart { session_id: String, format: String },
+    /// Export generation completed
+    AiExportComplete {
+        session_id: String,
+        format: String,
+        content: String,
+        provider: String,
+        generation_time_ms: u64,
+    },
+    /// Export generation failed
+    AiExportError {
+        session_id: String,
+        format: String,
+        error: String,
+    },
     /// Memory ranking started
     RankingStart { project_id: String },
     /// Memory ranking completed
@@ -200,6 +216,31 @@ impl From<AiEvent> for SseEvent {
             AiEvent::MarkerError { session_id, error } => {
                 SseEvent::AiMarkerError { session_id, error }
             }
+            AiEvent::ExportStart { session_id, format } => {
+                SseEvent::AiExportStart { session_id, format }
+            }
+            AiEvent::ExportComplete {
+                session_id,
+                format,
+                content,
+                provider,
+                generation_time_ms,
+            } => SseEvent::AiExportComplete {
+                session_id,
+                format,
+                content,
+                provider,
+                generation_time_ms,
+            },
+            AiEvent::ExportError {
+                session_id,
+                format,
+                error,
+            } => SseEvent::AiExportError {
+                session_id,
+                format,
+                error,
+            },
         }
     }
 }
@@ -233,6 +274,10 @@ fn get_event_type(event: &SseEvent) -> &'static str {
         SseEvent::SchedulerTaskStart { .. } => "scheduler:start",
         SseEvent::SchedulerTaskComplete { .. } => "scheduler:complete",
         SseEvent::SchedulerTaskError { .. } => "scheduler:error",
+        // Export events
+        SseEvent::AiExportStart { .. } => "ai:export:start",
+        SseEvent::AiExportComplete { .. } => "ai:export:complete",
+        SseEvent::AiExportError { .. } => "ai:export:error",
     }
 }
 
