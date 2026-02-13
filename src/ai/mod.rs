@@ -11,6 +11,7 @@
 
 pub mod auto_trigger;
 pub mod cli;
+pub mod export;
 pub mod marker;
 pub mod memory;
 pub mod queue;

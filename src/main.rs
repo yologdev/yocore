@@ -40,14 +40,18 @@ struct Args {
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
-    // Initialize logging
+    // Initialize logging with non-blocking stderr writer.
+    // Using stderr keeps stdout clean for MCP JSON-RPC.
+    // Non-blocking prevents deadlocks when launched as a subprocess
+    // (parent process not draining the pipe blocks tokio workers).
+    let (non_blocking, _guard) = tracing_appender::non_blocking(std::io::stderr());
     let log_level = if args.verbose { "debug" } else { "info" };
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| format!("yocore={},tower_http=debug", log_level).into()),
         )
-        .with(tracing_subscriber::fmt::layer())
+        .with(tracing_subscriber::fmt::layer().with_writer(non_blocking))
         .init();
 
     // Handle --init flag
