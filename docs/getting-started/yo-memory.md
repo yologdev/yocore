@@ -143,8 +143,6 @@ Add to your MCP configuration:
 |------|-------------|
 | `yolog_search_memories` | Hybrid keyword + semantic search |
 | `yolog_get_project_context` | Project overview with categorized memories |
-| `yolog_get_memories_by_type` | Filter by type (decision, fact, etc.) |
-| `yolog_get_memories_by_tag` | Filter by tag |
 | `yolog_get_recent_memories` | Recent session memories |
 | `yolog_get_session_context` | Session state with lifeboat |
 | `yolog_save_lifeboat` | Save session state before compaction |
