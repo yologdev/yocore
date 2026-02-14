@@ -1,6 +1,6 @@
 [package]
 name = "yocore"
-version = "0.2.0"
+version = "0.3.0"
 description = "Yocore - headless service for watching, parsing, storing, and serving AI coding sessions"
 authors = ["Yolog Team"]
 edition = "2021"
