@@ -430,7 +430,7 @@ pub async fn merge_chunks(
 pub async fn get_capabilities() -> ProviderCapabilities {
     ProviderCapabilities {
         max_content_size: MAX_INPUT_LENGTH,
-        timeout_secs: 120,
+        timeout_secs: 180,
         supports_chunking: true,
     }
 }

@@ -171,9 +171,12 @@ async fn get_session_content(
 
         let combined = messages.join("\n");
 
-        // Truncate if too long
-        let content = if combined.len() > MAX_INPUT_CHARS {
-            format!("{}...\n[Content truncated]", &combined[..MAX_INPUT_CHARS])
+        // Truncate if too long (UTF-8 safe)
+        let content = if combined.chars().count() > MAX_INPUT_CHARS {
+            format!(
+                "{}...\n[Content truncated]",
+                combined.chars().take(MAX_INPUT_CHARS).collect::<String>()
+            )
         } else {
             combined
         };
