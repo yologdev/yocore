@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 pub async fn health(State(state): State<AppState>) -> impl IntoResponse {
     let mut resp = serde_json::json!({
         "status": "ok",
-        "version": env!("CARGO_PKG_VERSION"),
+        "version": if cfg!(debug_assertions) { "dev" } else { env!("CARGO_PKG_VERSION") },
         "storage": if state.storage.is_db() { "db" } else { "ephemeral" }
     });
 

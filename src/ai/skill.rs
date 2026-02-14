@@ -129,8 +129,8 @@ async fn get_session_content(
                         let result_preview = preview
                             .as_ref()
                             .map(|p| {
-                                if p.len() > 100 {
-                                    format!("{}...", &p[..100])
+                                if p.chars().count() > 100 {
+                                    format!("{}...", p.chars().take(100).collect::<String>())
                                 } else {
                                     p.clone()
                                 }
@@ -146,8 +146,8 @@ async fn get_session_content(
                 // Regular message
                 let content = preview
                     .map(|p| {
-                        if p.len() > 200 {
-                            format!("{}...", &p[..200])
+                        if p.chars().count() > 200 {
+                            format!("{}...", p.chars().take(200).collect::<String>())
                         } else {
                             p
                         }
@@ -171,9 +171,12 @@ async fn get_session_content(
 
         let combined = messages.join("\n");
 
-        // Truncate if too long
-        let content = if combined.len() > MAX_INPUT_CHARS {
-            format!("{}...\n[Content truncated]", &combined[..MAX_INPUT_CHARS])
+        // Truncate if too long (UTF-8 safe)
+        let content = if combined.chars().count() > MAX_INPUT_CHARS {
+            format!(
+                "{}...\n[Content truncated]",
+                combined.chars().take(MAX_INPUT_CHARS).collect::<String>()
+            )
         } else {
             combined
         };

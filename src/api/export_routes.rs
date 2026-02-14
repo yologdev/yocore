@@ -1,10 +1,11 @@
 //! AI Export route handlers
 //!
 //! Endpoints for generating AI-processed exports (Dev Notes, Blog Posts).
-//! Delegates to `ai::export` for prompt construction and CLI invocation.
+//! Uses fire-and-forget pattern: returns 202 immediately, delivers result via SSE.
 
 use super::AppState;
 use crate::ai::export::{self, ExportFormat};
+use crate::ai::types::AiEvent;
 use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
 
 /// Get AI export capabilities
@@ -12,12 +13,12 @@ pub async fn get_ai_export_capabilities() -> impl IntoResponse {
     Json(export::get_capabilities().await)
 }
 
-/// Generate AI export content
+/// Generate AI export content (async — returns 202, result delivered via SSE)
 pub async fn generate_ai_export(
     State(state): State<AppState>,
     Json(req): Json<export::GenerateExportRequest>,
 ) -> impl IntoResponse {
-    let format = match ExportFormat::from_str(&req.format) {
+    let format = match ExportFormat::parse_format(&req.format) {
         Some(f) => f,
         None => {
             return (
@@ -28,7 +29,7 @@ pub async fn generate_ai_export(
         }
     };
 
-    // Raw format doesn't need AI
+    // Raw format doesn't need AI — return immediately
     if format == ExportFormat::Raw {
         return Json(export::ExportResult {
             content: req.raw_content,
@@ -52,7 +53,7 @@ pub async fn generate_ai_export(
     };
 
     // Acquire task queue permit
-    let _permit = match state.ai_task_queue.acquire().await {
+    let permit = match state.ai_task_queue.acquire().await {
         Ok(permit) => permit,
         Err(e) => {
             return (
@@ -63,19 +64,50 @@ pub async fn generate_ai_export(
         }
     };
 
-    tracing::info!("Starting AI export generation ({})", req.format);
+    let session_id = req.session_id.clone();
+    let format_str = req.format.clone();
+    let raw_content = req.raw_content;
+    let ai_event_tx = state.ai_event_tx.clone();
 
-    match export::generate_export(&req.raw_content, format, &cli).await {
-        Ok(result) => Json(result).into_response(),
-        Err(e) => {
-            tracing::error!("Export generation failed: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": e })),
-            )
-                .into_response()
+    tracing::info!("Starting AI export generation ({})", format_str);
+
+    tokio::spawn(async move {
+        let _permit = permit;
+        let _ = ai_event_tx.send(AiEvent::ExportStart {
+            session_id: session_id.clone(),
+            format: format_str.clone(),
+        });
+
+        match export::generate_export(&raw_content, format, &cli).await {
+            Ok(result) => {
+                let _ = ai_event_tx.send(AiEvent::ExportComplete {
+                    session_id,
+                    format: result.format,
+                    content: result.content,
+                    provider: result.provider,
+                    generation_time_ms: result.generation_time_ms,
+                });
+            }
+            Err(e) => {
+                tracing::error!("Export generation failed: {}", e);
+                let _ = ai_event_tx.send(AiEvent::ExportError {
+                    session_id,
+                    format: format_str,
+                    error: e,
+                });
+            }
         }
-    }
+    });
+
+    (
+        StatusCode::ACCEPTED,
+        Json(serde_json::json!({
+            "status": "started",
+            "session_id": req.session_id,
+            "message": "Export generation started. Listen to SSE for results."
+        })),
+    )
+        .into_response()
 }
 
 /// Process a single chunk of content
@@ -83,7 +115,6 @@ pub async fn process_ai_export_chunk(
     State(state): State<AppState>,
     Json(req): Json<export::ChunkRequest>,
 ) -> impl IntoResponse {
-    // Detect CLI
     let cli = match export::ensure_cli().await {
         Ok(cli) => cli,
         Err(e) => {
@@ -95,7 +126,6 @@ pub async fn process_ai_export_chunk(
         }
     };
 
-    // Acquire task queue permit
     let _permit = match state.ai_task_queue.acquire().await {
         Ok(permit) => permit,
         Err(e) => {
@@ -131,7 +161,6 @@ pub async fn merge_ai_export_chunks(
     State(state): State<AppState>,
     Json(req): Json<export::MergeRequest>,
 ) -> impl IntoResponse {
-    // Detect CLI
     let cli = match export::ensure_cli().await {
         Ok(cli) => cli,
         Err(e) => {
@@ -143,7 +172,6 @@ pub async fn merge_ai_export_chunks(
         }
     };
 
-    // Acquire task queue permit
     let _permit = match state.ai_task_queue.acquire().await {
         Ok(permit) => permit,
         Err(e) => {

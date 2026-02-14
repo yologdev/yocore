@@ -32,6 +32,22 @@ pub enum AiEvent {
     MarkerComplete { session_id: String, count: usize },
     /// Marker detection failed
     MarkerError { session_id: String, error: String },
+    /// Export generation started
+    ExportStart { session_id: String, format: String },
+    /// Export generation completed
+    ExportComplete {
+        session_id: String,
+        format: String,
+        content: String,
+        provider: String,
+        generation_time_ms: u64,
+    },
+    /// Export generation failed
+    ExportError {
+        session_id: String,
+        format: String,
+        error: String,
+    },
 }
 
 impl AiEvent {
@@ -50,6 +66,9 @@ impl AiEvent {
             AiEvent::MarkerStart { .. } => "ai:markers:start",
             AiEvent::MarkerComplete { .. } => "ai:markers:complete",
             AiEvent::MarkerError { .. } => "ai:markers:error",
+            AiEvent::ExportStart { .. } => "ai:export:start",
+            AiEvent::ExportComplete { .. } => "ai:export:complete",
+            AiEvent::ExportError { .. } => "ai:export:error",
         }
     }
 }
