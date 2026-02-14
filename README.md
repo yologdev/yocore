@@ -1,7 +1,7 @@
 <div align="center">
 
 <picture>
-  <img alt="Yocore" src="docs/images/banner.svg" width="100%" height="auto">
+  <img alt="yocore" src="docs/images/banner.jpg" width="100%" height="auto">
 </picture>
 
 <a href="https://yologdev.github.io/yocore/">Docs</a> · <a href="https://github.com/yologdev/yocore">GitHub</a> · <a href="https://github.com/yologdev/yocore/issues">Issues</a> · <a href="https://github.com/yologdev/yocore/releases">Releases</a>
