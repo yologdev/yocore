@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-02-14
+
+### Added
+- Ephemeral in-memory storage mode (`storage = "ephemeral"`) with LRU eviction and message windowing
+- Voxel octopus banner for README
+- mdBook documentation site with GitHub Pages deployment
+
+### Fixed
+- UTF-8 safe string slicing preventing panics on multi-byte characters
+- Export timeout increased for large sessions
+- Non-blocking stderr for tracing to prevent subprocess deadlock
+
+### Changed
+- README redesigned with banner image, badges, and improved structure
+
 ## [0.2.0] - 2026-02-10
 
 ### Added

@@ -1,6 +1,6 @@
 {
   "name": "@yologdev/core",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Yocore - headless service for AI coding sessions",
   "bin": { "yocore": "bin/yocore" },
   "scripts": { "postinstall": "node scripts/postinstall.js" },
