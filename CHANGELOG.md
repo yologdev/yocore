@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-## [0.3.0] - 2026-02-14
+## [0.3.0] - 2026-02-15
 
 ### Added
 - Ephemeral in-memory storage mode (`storage = "ephemeral"`) with LRU eviction and message windowing
