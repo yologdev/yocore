@@ -14,9 +14,12 @@ Yocore is the core engine behind [Yolog](https://github.com/yologdev/yolog) - a 
 - **Session Watching**: Automatically watches folders for new AI coding sessions
 - **Multi-Parser Support**: Parses Claude Code, OpenClaw, and other AI assistant formats
 - **Full-Text Search**: SQLite FTS5-powered search across all sessions and memories
+- **Semantic Embeddings**: Local all-MiniLM-L6-v2 model for hybrid keyword + vector search
 - **Memory System**: Extract and organize decisions, facts, preferences, and tasks
+- **AI Export**: Generate technical summaries and highlight reels with chunked processing
+- **Marker Detection**: Identify breakthroughs, ship moments, bugs, and key decisions
 - **Ephemeral Mode**: Lightweight in-memory storage with no database overhead
-- **HTTP API**: RESTful API for session replay, search, and memory management
+- **HTTP API**: RESTful API (~57 endpoints) for session replay, search, and memory management
 - **MCP Server**: Model Context Protocol integration for AI assistants
 - **LAN Discovery**: Automatic instance discovery via mDNS/Bonjour on the local network
 - **Lifeboat Pattern**: Session context preservation across context compaction
@@ -102,8 +105,6 @@ When running in MCP mode (`yocore --mcp`), the following tools are available:
 |------|-------------|
 | `yolog_search_memories` | Hybrid keyword + semantic search |
 | `yolog_get_project_context` | Get project overview with categorized memories |
-| `yolog_get_memories_by_type` | Filter memories by type (decision, fact, etc.) |
-| `yolog_get_memories_by_tag` | Filter memories by tag |
 | `yolog_get_recent_memories` | Get memories from recent sessions |
 | `yolog_get_session_context` | Get session state with lifeboat pattern |
 | `yolog_save_lifeboat` | Save session state before context compaction |

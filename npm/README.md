@@ -80,8 +80,6 @@ When running in MCP mode (`yocore --mcp`):
 |------|-------------|
 | `yolog_search_memories` | Hybrid keyword + semantic search |
 | `yolog_get_project_context` | Get project overview with categorized memories |
-| `yolog_get_memories_by_type` | Filter memories by type |
-| `yolog_get_memories_by_tag` | Filter memories by tag |
 | `yolog_get_recent_memories` | Get memories from recent sessions |
 | `yolog_get_session_context` | Get session state with lifeboat pattern |
 | `yolog_save_lifeboat` | Save session state before context compaction |

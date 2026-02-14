@@ -25,10 +25,9 @@ Create one with `yocore --init`, or yocore will use built-in defaults.
 ## AI Features Not Working
 
 1. Verify Claude Code CLI is installed: `claude --version`
-2. Verify AI is enabled in config:
+2. Verify AI provider is configured:
    ```toml
    [ai]
-   enabled = true
    provider = "claude_code"
    ```
 3. Check AI CLI status: `curl http://localhost:19420/api/ai/cli/status`
