@@ -4,9 +4,23 @@
 //! Uses fire-and-forget pattern: returns 202 immediately, delivers result via SSE.
 
 use super::AppState;
+use crate::ai::cli::CliProvider;
 use crate::ai::export::{self, ExportFormat};
 use crate::ai::types::AiEvent;
+use crate::config::Config;
 use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
+
+/// Resolve the configured CLI provider from config
+fn resolve_provider(state: &AppState) -> CliProvider {
+    Config::from_file(&state.config_path)
+        .ok()
+        .and_then(|c| {
+            c.ai.provider
+                .as_deref()
+                .and_then(CliProvider::from_config_str)
+        })
+        .unwrap_or(CliProvider::ClaudeCode)
+}
 
 /// Get AI export capabilities
 pub async fn get_ai_export_capabilities() -> impl IntoResponse {
@@ -41,7 +55,8 @@ pub async fn generate_ai_export(
     }
 
     // Detect CLI
-    let cli = match export::ensure_cli().await {
+    let provider = resolve_provider(&state);
+    let cli = match export::ensure_cli(provider).await {
         Ok(cli) => cli,
         Err(e) => {
             return (
@@ -115,7 +130,8 @@ pub async fn process_ai_export_chunk(
     State(state): State<AppState>,
     Json(req): Json<export::ChunkRequest>,
 ) -> impl IntoResponse {
-    let cli = match export::ensure_cli().await {
+    let provider = resolve_provider(&state);
+    let cli = match export::ensure_cli(provider).await {
         Ok(cli) => cli,
         Err(e) => {
             return (
@@ -161,7 +177,8 @@ pub async fn merge_ai_export_chunks(
     State(state): State<AppState>,
     Json(req): Json<export::MergeRequest>,
 ) -> impl IntoResponse {
-    let cli = match export::ensure_cli().await {
+    let provider = resolve_provider(&state);
+    let cli = match export::ensure_cli(provider).await {
         Ok(cli) => cli,
         Err(e) => {
             return (

@@ -2602,12 +2602,24 @@ pub async fn get_memory_tags(
 // AI Features
 // ============================================================================
 
-use crate::ai::cli::detect_claude_code;
+use crate::ai::cli::CliProvider;
 use crate::ai::title::{generate_title, generate_title_from_text, store_title};
 use crate::ai::types::AiEvent;
 use crate::config::Config;
 
 use crate::config::AiFeature;
+
+/// Resolve the configured CLI provider from config
+fn resolve_provider(state: &AppState) -> CliProvider {
+    Config::from_file(&state.config_path)
+        .ok()
+        .and_then(|c| {
+            c.ai.provider
+                .as_deref()
+                .and_then(CliProvider::from_config_str)
+        })
+        .unwrap_or(CliProvider::ClaudeCode)
+}
 
 /// Check if a specific AI feature is active in config.toml
 fn check_ai_feature(
@@ -2634,10 +2646,12 @@ fn check_ai_feature(
 }
 
 /// Get AI CLI detection status
-pub async fn get_ai_cli_status() -> impl IntoResponse {
-    let detected = detect_claude_code().await;
+pub async fn get_ai_cli_status(State(state): State<AppState>) -> impl IntoResponse {
+    let provider = resolve_provider(&state);
+    let detected = crate::ai::cli::detect_provider(provider).await;
     Json(serde_json::json!({
-        "provider": "claude_code",
+        "provider": detected.provider.display_name(),
+        "provider_id": detected.provider.command_name(),
         "installed": detected.installed,
         "path": detected.path,
         "version": detected.version,
@@ -2823,6 +2837,7 @@ pub async fn trigger_title_generation(
         let idx = idx.clone();
         let ai_event_tx = state.ai_event_tx.clone();
         let sid = session_id.clone();
+        let provider = resolve_provider(&state);
 
         tokio::spawn(async move {
             let _permit = permit;
@@ -2830,7 +2845,7 @@ pub async fn trigger_title_generation(
                 session_id: sid.clone(),
             });
 
-            let result = generate_title_from_text(&sid, &first_messages, None).await;
+            let result = generate_title_from_text(&sid, &first_messages, None, provider).await;
 
             if let Some(ref title) = result.title {
                 idx.update_session(&sid, Some(title.clone()), None);
@@ -2929,6 +2944,7 @@ pub async fn trigger_title_generation(
     let db = state.db.clone().unwrap();
     let ai_event_tx = state.ai_event_tx.clone();
     let session_id_for_task = session_id.clone();
+    let provider = resolve_provider(&state);
 
     // Spawn background task for title generation
     tokio::spawn(async move {
@@ -2941,7 +2957,7 @@ pub async fn trigger_title_generation(
         });
 
         // Generate title
-        let result = generate_title(&db, &session_id_for_task, None).await;
+        let result = generate_title(&db, &session_id_for_task, None, provider).await;
 
         // Store result and emit event
         if let Some(ref title) = result.title {
@@ -3044,6 +3060,7 @@ pub async fn trigger_memory_extraction(
     let db = state.db.clone().unwrap();
     let ai_event_tx = state.ai_event_tx.clone();
     let session_id_for_task = session_id.clone();
+    let provider = resolve_provider(&state);
 
     // Spawn background task for memory extraction
     tokio::spawn(async move {
@@ -3056,7 +3073,8 @@ pub async fn trigger_memory_extraction(
         });
 
         // Extract memories (skip if already extracted unless force=true)
-        let result = crate::ai::extract_memories(&db, &session_id_for_task, None, force).await;
+        let result =
+            crate::ai::extract_memories(&db, &session_id_for_task, None, force, provider).await;
 
         // Emit completion or error event
         if let Some(error) = result.error {
@@ -3151,6 +3169,7 @@ pub async fn trigger_skill_extraction(
     let db = state.db.clone().unwrap();
     let ai_event_tx = state.ai_event_tx.clone();
     let session_id_for_task = session_id.clone();
+    let provider = resolve_provider(&state);
 
     // Spawn background task for skill extraction
     tokio::spawn(async move {
@@ -3163,7 +3182,8 @@ pub async fn trigger_skill_extraction(
         });
 
         // Extract skills (skip if already extracted unless force=true)
-        let result = crate::ai::extract_skills(&db, &session_id_for_task, None, force).await;
+        let result =
+            crate::ai::extract_skills(&db, &session_id_for_task, None, force, provider).await;
 
         // Emit completion or error event
         if let Some(error) = result.error {
@@ -3314,6 +3334,7 @@ pub async fn trigger_marker_detection(
     let db = state.db.clone().unwrap();
     let ai_event_tx = state.ai_event_tx.clone();
     let session_id_for_task = session_id.clone();
+    let provider = resolve_provider(&state);
 
     // Spawn background task for marker detection
     tokio::spawn(async move {
@@ -3326,10 +3347,10 @@ pub async fn trigger_marker_detection(
         });
 
         // Detect CLI
-        let cli = crate::ai::cli::detect_cli();
+        let cli = crate::ai::cli::detect_cli_sync(provider);
 
         // Run marker detection
-        let result = crate::ai::detect_markers(&db, &session_id_for_task, cli).await;
+        let result = crate::ai::detect_markers(&db, &session_id_for_task, cli, provider).await;
 
         // Emit completion event
         let _ = ai_event_tx.send(AiEvent::MarkerComplete {
