@@ -219,11 +219,20 @@ impl Core {
             sessions.len()
         );
 
+        let provider = self
+            .config
+            .ai
+            .provider
+            .as_deref()
+            .and_then(ai::cli::CliProvider::from_config_str)
+            .unwrap_or(ai::cli::CliProvider::ClaudeCode);
+
         let mut trigger = ai::AiAutoTrigger::new(
             self.config_path.clone(),
             db.clone(),
             self.ai_event_tx.clone(),
             self.ai_task_queue.clone(),
+            provider,
         );
 
         for (session_id, message_count, needs_title, needs_memory, needs_skills) in sessions {

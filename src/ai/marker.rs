@@ -5,7 +5,9 @@
 //! - Phase 1: Find important moment indices (fast, no labels)
 //! - Phase 2: Generate labels for detected moments (accurate, small input)
 
-use crate::ai::cli::{call_cli_with_prompt, parse_json_response, DetectedCli};
+use crate::ai::cli::{
+    call_cli_with_prompt, detect_provider, parse_json_response, CliProvider, DetectedCli,
+};
 use crate::db::Database;
 use chrono::Utc;
 use rusqlite::params;
@@ -587,14 +589,19 @@ pub async fn detect_markers(
     db: &Arc<Database>,
     session_id: &str,
     cli: Option<DetectedCli>,
+    provider: CliProvider,
 ) -> MarkerDetectionResult {
     let cli = match cli {
         Some(c) => c,
         None => {
-            return MarkerDetectionResult {
-                session_id: session_id.to_string(),
-                markers_detected: 0,
-            };
+            let detected = detect_provider(provider).await;
+            if !detected.installed {
+                return MarkerDetectionResult {
+                    session_id: session_id.to_string(),
+                    markers_detected: 0,
+                };
+            }
+            detected
         }
     };
 

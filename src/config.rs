@@ -626,7 +626,8 @@ enabled = true
 # AI features — each toggle is independent, some require storage = "db"
 # AI is active when provider is set and at least one feature is enabled.
 [ai]
-# provider = "claude_code"
+# provider = "claude_code"     # Claude Code CLI
+# provider = "openclaw"        # OpenClaw CLI (requires gateway)
 title_generation = true
 marker_detection = true
 memory_extraction = true
@@ -757,6 +758,19 @@ provider = "claude_code"
         config.ai.apply_legacy();
 
         assert!(config.ai.provider.is_none());
+    }
+
+    #[test]
+    fn test_parse_openclaw_provider() {
+        let toml = r#"
+[ai]
+provider = "openclaw"
+title_generation = true
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert_eq!(config.ai.provider.as_deref(), Some("openclaw"));
+        assert!(config.is_ai_active());
+        assert!(config.is_feature_active(AiFeature::TitleGeneration));
     }
 
     #[test]

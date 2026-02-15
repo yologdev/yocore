@@ -156,12 +156,20 @@ pub async fn start_watcher(
     let ai_event_tx_for_state = ai_event_tx.clone();
     let ai_task_queue_for_state = ai_task_queue.clone();
 
+    let provider = config
+        .ai
+        .provider
+        .as_deref()
+        .and_then(crate::ai::cli::CliProvider::from_config_str)
+        .unwrap_or(crate::ai::cli::CliProvider::ClaudeCode);
+
     let ai_trigger = db.map(|db| {
         Arc::new(tokio::sync::Mutex::new(AiAutoTrigger::new(
             config_path,
             db,
             ai_event_tx,
             ai_task_queue,
+            provider,
         )))
     });
 
@@ -438,6 +446,13 @@ async fn maybe_trigger_ephemeral_title(
     // Mark as generated before spawning to prevent duplicate triggers
     idx.set_title_generated(session_id);
 
+    let provider = config
+        .ai
+        .provider
+        .as_deref()
+        .and_then(crate::ai::cli::CliProvider::from_config_str)
+        .unwrap_or(crate::ai::cli::CliProvider::ClaudeCode);
+
     let idx = idx.clone();
     let sid = session_id.to_string();
     let tx = ai_event_tx.clone();
@@ -448,7 +463,8 @@ async fn maybe_trigger_ephemeral_title(
             session_id: sid.clone(),
         });
 
-        let result = crate::ai::title::generate_title_from_text(&sid, &first_messages, None).await;
+        let result =
+            crate::ai::title::generate_title_from_text(&sid, &first_messages, None, provider).await;
 
         if let Some(ref title) = result.title {
             idx.update_session(&sid, Some(title.clone()), None);

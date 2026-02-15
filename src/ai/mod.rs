@@ -7,7 +7,8 @@
 //! - Marker detection (breakthroughs, bugs, decisions, deployments)
 //! - Memory ranking and quality scoring
 //!
-//! All AI features work by spawning Claude Code CLI as a subprocess.
+//! AI features work by spawning a configured CLI provider (Claude Code, OpenClaw, etc.)
+//! as a subprocess. Provider-specific logic is encapsulated in `cli::CliProvider`.
 
 pub mod auto_trigger;
 pub mod cli;
@@ -23,7 +24,7 @@ pub mod types;
 
 // Re-export main types
 pub use auto_trigger::AiAutoTrigger;
-pub use cli::{CliProvider, DetectedCli};
+pub use cli::{detect_provider, CliProvider, DetectedCli};
 pub use marker::detect_markers;
 pub use memory::extract_memories;
 pub use queue::AiTaskQueue;
