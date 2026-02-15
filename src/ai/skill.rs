@@ -6,7 +6,7 @@
 use crate::db::Database;
 use std::sync::Arc;
 
-use super::cli::{detect_claude_code, run_cli, DetectedCli};
+use super::cli::{detect_provider, run_cli, CliProvider, DetectedCli};
 use super::types::SkillExtractionResult;
 
 /// Maximum characters of input to send to AI
@@ -314,6 +314,7 @@ pub async fn extract_skills(
     session_id: &str,
     cli: Option<DetectedCli>,
     force: bool,
+    provider: CliProvider,
 ) -> SkillExtractionResult {
     // Check if already extracted and no significant new content (unless force)
     if !force {
@@ -357,7 +358,7 @@ pub async fn extract_skills(
     // Detect CLI if not provided
     let cli = match cli {
         Some(c) => c,
-        None => detect_claude_code().await,
+        None => detect_provider(provider).await,
     };
 
     if !cli.installed {
@@ -365,7 +366,7 @@ pub async fn extract_skills(
             session_id: session_id.to_string(),
             skills_extracted: 0,
             duplicates_found: 0,
-            error: Some("Claude Code CLI not installed".to_string()),
+            error: Some(format!("{} CLI not installed", cli.provider.display_name())),
         };
     }
 

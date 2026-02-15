@@ -3,6 +3,7 @@
 //! Automatically triggers AI tasks (title, memory, skills) after session parsing.
 //! Replaces the Desktop-side background-sync.ts logic — yocore now owns the full pipeline.
 
+use crate::ai::cli::CliProvider;
 use crate::ai::title::{generate_title, store_title};
 use crate::ai::types::AiEvent;
 use crate::ai::AiTaskQueue;
@@ -30,6 +31,8 @@ pub struct AiAutoTrigger {
     ai_task_queue: AiTaskQueue,
     /// Track message count at last extraction per session
     extraction_tracker: HashMap<String, usize>,
+    /// Configured AI CLI provider
+    provider: CliProvider,
 }
 
 impl AiAutoTrigger {
@@ -38,6 +41,7 @@ impl AiAutoTrigger {
         db: Arc<Database>,
         ai_event_tx: broadcast::Sender<AiEvent>,
         ai_task_queue: AiTaskQueue,
+        provider: CliProvider,
     ) -> Self {
         Self {
             config_path,
@@ -45,6 +49,7 @@ impl AiAutoTrigger {
             ai_event_tx,
             ai_task_queue,
             extraction_tracker: HashMap::new(),
+            provider,
         }
     }
 
@@ -148,6 +153,7 @@ impl AiAutoTrigger {
         let db = self.db.clone();
         let ai_event_tx = self.ai_event_tx.clone();
         let session_id = session_id.to_string();
+        let provider = self.provider;
 
         tokio::spawn(async move {
             let _permit = permit;
@@ -157,7 +163,7 @@ impl AiAutoTrigger {
                 session_id: sid.clone(),
             });
 
-            let result = generate_title(&db, &sid, None).await;
+            let result = generate_title(&db, &sid, None, provider).await;
 
             if let Some(ref title) = result.title {
                 if let Err(e) = store_title(&db, &sid, title).await {
@@ -200,6 +206,7 @@ impl AiAutoTrigger {
         let db = self.db.clone();
         let ai_event_tx = self.ai_event_tx.clone();
         let session_id = session_id.to_string();
+        let provider = self.provider;
 
         tokio::spawn(async move {
             let _permit = permit;
@@ -209,7 +216,7 @@ impl AiAutoTrigger {
                 session_id: sid.clone(),
             });
 
-            let result = crate::ai::extract_memories(&db, &sid, None, false).await;
+            let result = crate::ai::extract_memories(&db, &sid, None, false, provider).await;
 
             if let Some(error) = result.error {
                 tracing::warn!(
@@ -244,6 +251,7 @@ impl AiAutoTrigger {
         let db = self.db.clone();
         let ai_event_tx = self.ai_event_tx.clone();
         let session_id = session_id.to_string();
+        let provider = self.provider;
 
         tokio::spawn(async move {
             let _permit = permit;
@@ -253,7 +261,7 @@ impl AiAutoTrigger {
                 session_id: sid.clone(),
             });
 
-            let result = crate::ai::extract_skills(&db, &sid, None, false).await;
+            let result = crate::ai::extract_skills(&db, &sid, None, false, provider).await;
 
             if let Some(error) = result.error {
                 tracing::warn!(
