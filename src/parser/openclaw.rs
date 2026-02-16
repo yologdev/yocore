@@ -21,8 +21,15 @@ use super::common::{
 };
 use super::types::*;
 use super::SessionParser;
+use regex::Regex;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::sync::LazyLock;
+
+/// Matches OpenClaw's timestamp prefix on user messages: `[Mon 2026-02-16 01:47 UTC] `
+static OPENCLAW_TIMESTAMP_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^\[(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) \d{4}-\d{2}-\d{2} \d{2}:\d{2} \w+\] ").unwrap()
+});
 
 /// Parser for OpenClaw session files.
 pub struct OpenClawParser {
@@ -266,10 +273,11 @@ impl OpenClawParser {
 
     // ── Content extraction helpers ───────────────────────────────────────────
 
-    /// Extract text content from a user message.
+    /// Extract text content from a user message, stripping OpenClaw's timestamp prefix.
     fn extract_message_text(&self, event: &Value) -> String {
         if let Some(content) = event.get("message").and_then(|m| m.get("content")) {
-            return content_to_string(content);
+            let text = content_to_string(content);
+            return OPENCLAW_TIMESTAMP_RE.replace(&text, "").into_owned();
         }
         String::new()
     }
@@ -587,5 +595,28 @@ mod tests {
     fn test_name() {
         let parser = OpenClawParser::new();
         assert_eq!(parser.name(), "openclaw");
+    }
+
+    #[test]
+    fn test_strip_timestamp_prefix_from_user_message() {
+        let parser = OpenClawParser::new();
+        let lines = vec![
+            r#"{"type":"message","id":"msg1","parentId":"p1","timestamp":"2026-02-16T01:47:00Z","message":{"role":"user","content":[{"type":"text","text":"[Mon 2026-02-16 01:47 UTC] start build"}],"timestamp":1771232550544}}"#.to_string(),
+        ];
+        let result = parser.parse(&lines);
+        assert_eq!(result.events.len(), 1);
+        assert_eq!(result.events[0].role, "user");
+        assert_eq!(result.events[0].search_content, "start build");
+        assert!(!result.events[0].search_content.contains("Mon 2026"));
+    }
+
+    #[test]
+    fn test_no_strip_when_no_timestamp_prefix() {
+        let parser = OpenClawParser::new();
+        let lines = vec![
+            r#"{"type":"message","id":"msg1","parentId":"p1","timestamp":"2026-02-16T01:47:00Z","message":{"role":"user","content":[{"type":"text","text":"just a normal message"}],"timestamp":1771232550544}}"#.to_string(),
+        ];
+        let result = parser.parse(&lines);
+        assert_eq!(result.events[0].search_content, "just a normal message");
     }
 }
