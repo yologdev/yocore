@@ -6,7 +6,7 @@
 use crate::db::Database;
 use std::sync::Arc;
 
-use super::cli::{detect_claude_code, run_cli, DetectedCli};
+use super::cli::{detect_provider, run_cli, CliProvider, DetectedCli};
 use super::types::MemoryExtractionResult;
 
 /// Maximum characters of input to send to AI
@@ -275,6 +275,7 @@ pub async fn extract_memories(
     session_id: &str,
     cli: Option<DetectedCli>,
     force: bool,
+    provider: CliProvider,
 ) -> MemoryExtractionResult {
     // Check if already extracted and no significant new content (unless force)
     if !force {
@@ -318,7 +319,7 @@ pub async fn extract_memories(
     // Detect CLI if not provided
     let cli = match cli {
         Some(c) => c,
-        None => detect_claude_code().await,
+        None => detect_provider(provider).await,
     };
 
     if !cli.installed {
@@ -326,7 +327,7 @@ pub async fn extract_memories(
             session_id: session_id.to_string(),
             memories_extracted: 0,
             memories_skipped: 0,
-            error: Some("Claude Code CLI not installed".to_string()),
+            error: Some(format!("{} CLI not installed", cli.provider.display_name())),
         };
     }
 

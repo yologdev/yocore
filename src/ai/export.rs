@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-use super::cli::{detect_claude_code, run_cli, DetectedCli};
+use super::cli::{detect_provider, run_cli, CliProvider, DetectedCli};
 
 /// Maximum input length to send to CLI
 pub const MAX_INPUT_LENGTH: usize = 100_000;
@@ -436,10 +436,13 @@ pub async fn get_capabilities() -> ProviderCapabilities {
 }
 
 /// Detect CLI availability (convenience wrapper)
-pub async fn ensure_cli() -> Result<DetectedCli, String> {
-    let cli = detect_claude_code().await;
+pub async fn ensure_cli(provider: CliProvider) -> Result<DetectedCli, String> {
+    let cli = detect_provider(provider).await;
     if !cli.installed {
-        return Err("Claude Code CLI not installed. Please install it first.".to_string());
+        return Err(format!(
+            "{} CLI not installed. Please install it first.",
+            cli.provider.display_name()
+        ));
     }
     Ok(cli)
 }

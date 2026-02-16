@@ -5,7 +5,7 @@
 use crate::db::Database;
 use std::sync::Arc;
 
-use super::cli::{detect_claude_code, run_cli, DetectedCli};
+use super::cli::{detect_provider, run_cli, CliProvider, DetectedCli};
 use super::types::TitleGenerationResult;
 
 /// Maximum characters for title
@@ -95,18 +95,19 @@ pub async fn generate_title(
     db: &Arc<Database>,
     session_id: &str,
     cli: Option<DetectedCli>,
+    provider: CliProvider,
 ) -> TitleGenerationResult {
     // Detect CLI if not provided
     let cli = match cli {
         Some(c) => c,
-        None => detect_claude_code().await,
+        None => detect_provider(provider).await,
     };
 
     if !cli.installed {
         return TitleGenerationResult {
             session_id: session_id.to_string(),
             title: None,
-            error: Some("Claude Code CLI not installed".to_string()),
+            error: Some(format!("{} CLI not installed", cli.provider.display_name())),
         };
     }
 
@@ -190,17 +191,18 @@ pub async fn generate_title_from_text(
     session_id: &str,
     first_messages: &str,
     cli: Option<DetectedCli>,
+    provider: CliProvider,
 ) -> TitleGenerationResult {
     let cli = match cli {
         Some(c) => c,
-        None => detect_claude_code().await,
+        None => detect_provider(provider).await,
     };
 
     if !cli.installed {
         return TitleGenerationResult {
             session_id: session_id.to_string(),
             title: None,
-            error: Some("Claude Code CLI not installed".to_string()),
+            error: Some(format!("{} CLI not installed", cli.provider.display_name())),
         };
     }
 
