@@ -1987,14 +1987,11 @@ pub async fn append_session_messages(
 #[derive(Debug, Deserialize)]
 pub struct UpdateAgentSummaryRequest {
     pub agent_file_path: String,
-    pub input_tokens: i64,
-    pub output_tokens: i64,
-    pub cache_read_tokens: i64,
-    pub cache_creation_tokens: i64,
-    pub model: Option<String>,
 }
 
-/// Update or insert agent token summary for a session
+/// Update or insert agent token summary for a session.
+/// Reads the agent file, parses it with the correct provider parser,
+/// and stores the aggregated token summary.
 pub async fn update_agent_summary(
     State(state): State<AppState>,
     Path(session_id): Path<String>,
@@ -2008,17 +2005,78 @@ pub async fn update_agent_summary(
             .into_response();
     }
 
-    let result = state
-        .db
-        .as_ref()
-        .unwrap()
+    let db = state.db.as_ref().unwrap().clone();
+
+    // Step 1: Look up session's ai_tool to determine parser type
+    let sid = session_id.clone();
+    let parser_type = match db
+        .with_conn(move |conn| {
+            conn.query_row("SELECT ai_tool FROM sessions WHERE id = ?", [&sid], |row| {
+                row.get::<_, String>(0)
+            })
+        })
+        .await
+    {
+        Ok(ai_tool) => match ai_tool.as_str() {
+            "Claude Code" => "claude_code",
+            "OpenClaw" => "openclaw",
+            "Cursor" => "cursor",
+            _ => "claude_code",
+        }
+        .to_string(),
+        Err(e) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": format!("Session not found: {}", e) })),
+            )
+                .into_response();
+        }
+    };
+
+    // Step 2: Read and parse the agent file
+    let file_content = match std::fs::read_to_string(&req.agent_file_path) {
+        Ok(content) => content,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": format!("Failed to read agent file: {}", e) })),
+            )
+                .into_response();
+        }
+    };
+
+    let parser = match crate::parser::get_parser(&parser_type) {
+        Some(p) => p,
+        None => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(
+                    serde_json::json!({ "error": format!("Unknown parser type: {}", parser_type) }),
+                ),
+            )
+                .into_response();
+        }
+    };
+
+    let lines: Vec<String> = file_content.lines().map(|l| l.to_string()).collect();
+    let result = parser.parse(&lines);
+
+    let input_tokens = result.stats.total_input_tokens;
+    let output_tokens = result.stats.total_output_tokens;
+    let cache_read_tokens = result.stats.total_cache_read_tokens;
+    let cache_creation_tokens = result.stats.total_cache_creation_tokens;
+    let model = result.metadata.model;
+
+    // Step 3: Store agent summary in database
+    let agent_file_path = req.agent_file_path;
+    let db_result = db
         .with_conn(move |conn| {
             // Check if agent summary message already exists
             let existing: Option<i64> = conn
                 .query_row(
                     "SELECT id FROM session_messages
                      WHERE session_id = ? AND tool_name = 'agent_summary' AND tool_summary = ?",
-                    rusqlite::params![session_id, req.agent_file_path],
+                    rusqlite::params![session_id, agent_file_path],
                     |row| row.get(0),
                 )
                 .ok();
@@ -2031,8 +2089,8 @@ pub async fn update_agent_summary(
                         cache_read_tokens = ?, cache_creation_tokens = ?, model = ?
                      WHERE id = ?",
                     rusqlite::params![
-                        req.input_tokens, req.output_tokens,
-                        req.cache_read_tokens, req.cache_creation_tokens, req.model, id
+                        input_tokens, output_tokens,
+                        cache_read_tokens, cache_creation_tokens, model, id
                     ],
                 )?;
                 Ok::<_, rusqlite::Error>(("updated", id, session_id, None::<i64>))
@@ -2055,9 +2113,9 @@ pub async fn update_agent_summary(
                         model, timestamp, has_code, has_error, has_file_changes, byte_offset, byte_length
                     ) VALUES (?, ?, 'assistant', 'agent_summary', ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, 0)",
                     rusqlite::params![
-                        session_id, seq, req.agent_file_path,
-                        req.input_tokens, req.output_tokens,
-                        req.cache_read_tokens, req.cache_creation_tokens, req.model, now
+                        session_id, seq, agent_file_path,
+                        input_tokens, output_tokens,
+                        cache_read_tokens, cache_creation_tokens, model, now
                     ],
                 )?;
                 let id = conn.last_insert_rowid();
@@ -2066,7 +2124,7 @@ pub async fn update_agent_summary(
         })
         .await;
 
-    match result {
+    match db_result {
         Ok((action, id, sid, seq)) => Json(serde_json::json!({
             "action": action,
             "id": id,
