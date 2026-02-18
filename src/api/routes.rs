@@ -1278,12 +1278,14 @@ pub async fn get_message_content(
     State(state): State<AppState>,
     Path((session_id, seq)): Path<(String, i64)>,
 ) -> impl IntoResponse {
-    // Get file_path + byte_offset + byte_length from the appropriate backend
+    // Get file_path + byte_offset + byte_length + ai_tool from the appropriate backend
     let lookup = if let Some(idx) = &state.ephemeral {
         let session = idx.get_session(&session_id);
         let message = idx.get_message(&session_id, seq);
         match (session, message) {
-            (Some(s), Some(m)) => Ok((s.file_path, m.byte_offset, m.byte_length)),
+            (Some(s), Some(m)) => {
+                Ok((s.file_path, m.byte_offset, m.byte_length, s.ai_tool.clone()))
+            }
             _ => Err((
                 StatusCode::NOT_FOUND,
                 Json(serde_json::json!({ "error": "Message not found" })),
@@ -1294,7 +1296,7 @@ pub async fn get_message_content(
         let db_result = db
             .with_read_conn(move |conn| {
                 conn.query_row(
-                    "SELECT s.file_path, m.byte_offset, m.byte_length
+                    "SELECT s.file_path, m.byte_offset, m.byte_length, s.ai_tool
                      FROM session_messages m
                      JOIN sessions s ON s.id = m.session_id
                      WHERE m.session_id = ? AND m.sequence_num = ?",
@@ -1304,6 +1306,7 @@ pub async fn get_message_content(
                             row.get::<_, String>(0)?,
                             row.get::<_, i64>(1)?,
                             row.get::<_, i64>(2)?,
+                            row.get::<_, String>(3)?,
                         ))
                     },
                 )
@@ -1322,7 +1325,7 @@ pub async fn get_message_content(
         }
     };
 
-    let (file_path, byte_offset, byte_length) = match lookup {
+    let (file_path, byte_offset, byte_length, ai_tool) = match lookup {
         Ok(result) => result,
         Err(resp) => return resp.into_response(),
     };
@@ -1344,9 +1347,15 @@ pub async fn get_message_content(
 
     match file_result {
         Ok(Ok(content)) => {
-            // Parse as JSON and return
             match serde_json::from_str::<serde_json::Value>(&content) {
-                Ok(json) => Json(json).into_response(),
+                Ok(mut json) => {
+                    // Normalize non-standard formats to the unified format
+                    // so the client parser can render them without changes
+                    if ai_tool != "Claude Code" {
+                        json = normalize_raw_event(json);
+                    }
+                    Json(json).into_response()
+                }
                 Err(_) => Json(serde_json::json!({ "raw": content })).into_response(),
             }
         }
@@ -1361,6 +1370,186 @@ pub async fn get_message_content(
         )
             .into_response(),
     }
+}
+
+/// Strip OpenClaw's timestamp prefix from user messages.
+/// e.g. "[Mon 2026-02-16 01:30 UTC] actual message" → "actual message"
+fn strip_openclaw_timestamp(text: &str) -> &str {
+    // Pattern: [Day YYYY-MM-DD HH:MM UTC]
+    if text.starts_with('[') {
+        if let Some(end) = text.find("] ") {
+            // Verify it looks like a timestamp (contains UTC or a date-like pattern)
+            let bracket_content = &text[1..end];
+            if bracket_content.contains("UTC")
+                || bracket_content.contains("20") && bracket_content.len() < 30
+            {
+                return &text[end + 2..];
+            }
+        }
+    }
+    text
+}
+
+/// Normalize a raw JSONL event from any provider to the unified format
+/// that the client's UnifiedParser can process.
+///
+/// Currently handles OpenClaw format:
+/// - `type: "message"` + `message.role` → `type: "<role>"`
+/// - `id` / `parentId` → `uuid` / `parentUuid`
+/// - `toolCall` content blocks → `tool_use` blocks
+/// - `toolResult` role → `type: "user"` with `tool_result` content block
+/// - Strip timestamp prefix from user messages
+fn normalize_raw_event(event: serde_json::Value) -> serde_json::Value {
+    use serde_json::{json, Map, Value};
+
+    let obj = match event.as_object() {
+        Some(o) => o,
+        None => return event,
+    };
+
+    let event_type = obj.get("type").and_then(|v| v.as_str()).unwrap_or("");
+
+    // Only transform "message" type events (OpenClaw wrapper)
+    if event_type != "message" {
+        if event_type == "session" {
+            let mut result = Map::new();
+            result.insert("type".into(), json!("system"));
+            if let Some(ts) = obj.get("timestamp") {
+                result.insert("timestamp".into(), ts.clone());
+            }
+            result.insert(
+                "content".into(),
+                json!(serde_json::to_string(&event).unwrap_or_default()),
+            );
+            return Value::Object(result);
+        }
+        return event;
+    }
+
+    let message = match obj.get("message").and_then(|v| v.as_object()) {
+        Some(m) => m,
+        None => return event,
+    };
+    let role = message.get("role").and_then(|v| v.as_str()).unwrap_or("");
+
+    let mut result = Map::new();
+
+    // id → uuid, parentId → parentUuid
+    if let Some(id) = obj.get("id") {
+        result.insert("uuid".into(), id.clone());
+    }
+    if let Some(pid) = obj.get("parentId") {
+        result.insert("parentUuid".into(), pid.clone());
+    }
+    if let Some(ts) = obj.get("timestamp") {
+        result.insert("timestamp".into(), ts.clone());
+    }
+
+    match role {
+        "user" => {
+            result.insert("type".into(), json!("user"));
+            let mut msg = Map::new();
+            if let Some(blocks) = message.get("content").and_then(|c| c.as_array()) {
+                // Strip OpenClaw timestamp prefix from user text blocks
+                // e.g. "[Mon 2026-02-16 01:30 UTC] actual message"
+                let cleaned: Vec<Value> = blocks
+                    .iter()
+                    .map(|block| {
+                        if block.get("type").and_then(|t| t.as_str()) == Some("text") {
+                            if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
+                                let stripped = strip_openclaw_timestamp(text);
+                                let mut b = block.as_object().unwrap().clone();
+                                b.insert("text".into(), json!(stripped));
+                                return Value::Object(b);
+                            }
+                        }
+                        block.clone()
+                    })
+                    .collect();
+                msg.insert("content".into(), Value::Array(cleaned));
+            } else if let Some(c) = message.get("content") {
+                msg.insert("content".into(), c.clone());
+            }
+            result.insert("message".into(), Value::Object(msg));
+        }
+        "assistant" => {
+            result.insert("type".into(), json!("assistant"));
+            let mut msg = Map::new();
+            // Transform content blocks: toolCall → tool_use
+            if let Some(blocks) = message.get("content").and_then(|c| c.as_array()) {
+                let transformed: Vec<Value> = blocks
+                    .iter()
+                    .map(|block| {
+                        if block.get("type").and_then(|t| t.as_str()) == Some("toolCall") {
+                            let mut tu = Map::new();
+                            tu.insert("type".into(), json!("tool_use"));
+                            // OpenClaw uses "name" (same as Claude Code)
+                            if let Some(v) = block.get("name").or_else(|| block.get("toolName")) {
+                                tu.insert("name".into(), v.clone());
+                            }
+                            if let Some(v) = block.get("arguments") {
+                                tu.insert("input".into(), v.clone());
+                            }
+                            // OpenClaw uses "id" for tool call ID
+                            if let Some(v) = block.get("id").or_else(|| block.get("toolCallId")) {
+                                tu.insert("id".into(), v.clone());
+                            }
+                            Value::Object(tu)
+                        } else {
+                            block.clone()
+                        }
+                    })
+                    .collect();
+                msg.insert("content".into(), Value::Array(transformed));
+            } else if let Some(c) = message.get("content") {
+                msg.insert("content".into(), c.clone());
+            }
+            if let Some(m) = message.get("model") {
+                msg.insert("model".into(), m.clone());
+            }
+            if let Some(u) = message.get("usage").and_then(|u| u.as_object()) {
+                let mut nu = Map::new();
+                if let Some(v) = u.get("input") {
+                    nu.insert("input_tokens".into(), v.clone());
+                }
+                if let Some(v) = u.get("output") {
+                    nu.insert("output_tokens".into(), v.clone());
+                }
+                if let Some(v) = u.get("cacheRead") {
+                    nu.insert("cache_read_input_tokens".into(), v.clone());
+                }
+                if let Some(v) = u.get("cacheWrite") {
+                    nu.insert("cache_creation_input_tokens".into(), v.clone());
+                }
+                msg.insert("usage".into(), Value::Object(nu));
+            }
+            result.insert("message".into(), Value::Object(msg));
+        }
+        "toolResult" => {
+            // → type="user" with tool_result content block
+            result.insert("type".into(), json!("user"));
+            let mut msg = Map::new();
+            let mut tr = Map::new();
+            tr.insert("type".into(), json!("tool_result"));
+            if let Some(v) = message.get("toolCallId") {
+                tr.insert("tool_use_id".into(), v.clone());
+            }
+            if let Some(v) = message.get("content") {
+                tr.insert("content".into(), v.clone());
+            }
+            msg.insert("content".into(), Value::Array(vec![Value::Object(tr)]));
+            result.insert("message".into(), Value::Object(msg));
+            // Expose toolName for inferToolNameFromResult
+            if let Some(tn) = message.get("toolName") {
+                let mut tur = Map::new();
+                tur.insert("toolName".into(), tn.clone());
+                result.insert("toolUseResult".into(), Value::Object(tur));
+            }
+        }
+        _ => return event,
+    }
+
+    Value::Object(result)
 }
 
 // ============================================================================
