@@ -1283,7 +1283,9 @@ pub async fn get_message_content(
         let session = idx.get_session(&session_id);
         let message = idx.get_message(&session_id, seq);
         match (session, message) {
-            (Some(s), Some(m)) => Ok((s.file_path, m.byte_offset, m.byte_length, String::new())),
+            (Some(s), Some(m)) => {
+                Ok((s.file_path, m.byte_offset, m.byte_length, s.ai_tool.clone()))
+            }
             _ => Err((
                 StatusCode::NOT_FOUND,
                 Json(serde_json::json!({ "error": "Message not found" })),
